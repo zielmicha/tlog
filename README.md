@@ -15,7 +15,6 @@ Transaction log server
 - After storing log entry on NVME it replies to the client on successfull transaction.
 - Separate worker stores log entries to OBJSTOR
 - Assumption: We do not keep actual data, we keep only metadata log (if yes, then we do not need to keep [references in a storage](https://github.com/g8os/stor_client_lib/blob/master/README.md), remove it from there)
-
 - We instantiate 10 instancecs of slow HDD using [OBJSTOR API](https://github.com/g8os/objstor)
 - Each instance is used to keep a part of erasure coded data
 
@@ -24,3 +23,5 @@ We receive following information from the TLOG client:
 - lbaIndex
 - hash2 (key of the data in data storage cluster)
 - timestamp
+
+Workflow 
