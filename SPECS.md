@@ -12,11 +12,13 @@
    - Size
    - Header
    - CRC
+   - Data
 
 ## Workflow during flush
  - Hashing content (1) (If this is the first block, Hash (1) will be defined-private-key)
  - Compression
  - Encryption (Key (1))
  - Hashing encrypted block (2)
- - Saving to ForestDB ARDB Backend
+ - Erasure coding the full payload
+ - Saving each parts to ForestDB ARDB Backend
 
