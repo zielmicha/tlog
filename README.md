@@ -24,4 +24,4 @@ We receive following information from the TLOG client:
 - hash2 (key of the data in data storage cluster)
 - timestamp
 
-Workflow 
+Workflow  
