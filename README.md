@@ -7,6 +7,7 @@ Transaction log server
 
 - TLOG Client library is a client lib that works on GIG BLOCKSTOR (NBD Server)
 - TLOG Client communicates with TLOG Server via dpdk stack.
+- Communication between client and server use binary capnp stream (no RPC).
 
 ### Data send from the client to server:
 - volume ID
@@ -28,14 +29,14 @@ max size: maximum database size before force flush
 
 ### Enrty log structure:
 ```
-Name
-Size
-Timestamp
+Name (Text)
+Size (uint64)
+Timestamp (uint64)
 Blocks:
-  Size
-  Header
-  CRC
-  Data
+  Size (uint64)
+  Header (Not defined)
+  CRC32 (uint32)
+  Data (Variable size Data)
 ```
 
 ## Workflow during flush
