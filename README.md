@@ -21,6 +21,10 @@ Transaction log server
 - After storing log entry it replies to the client on successfull transaction.
 - after timeout or size of the aggregation is reached, we flush to OBJSTOR on top of ardb with forstdb datastore.
 - Ideal setup would be to spread erasure coded blocks on different disks.
+- For erasurecoding we split data blocks for 20 parts
+- We use 20 instance OBJSTOR cluster to keep data blocks
+- Each instance is used to keep erasure coded part according to its index (erasure coded part index == OBJSTOR instance index)
+- We keep only backward links in our blockchain of history. We will add separate forward lining structure later in case it will be needed for the speed of recovery
 
 ### Settings
 
