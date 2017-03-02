@@ -10,10 +10,15 @@ Transaction log server
 - Communication between client and server use binary capnp stream (no RPC).
 
 ### Data send from the client to server:
-- volume ID
-- LBA
-- data
-- timestamp
+```
+Block:
+  - volume ID: uint32
+  - LBA :uint64
+  - Size :uint64
+  - crc32 :uint32
+  - data :Data (16K)
+  - timestamp :uint64
+ ```
 
 ## TLOG Server
 
@@ -31,16 +36,14 @@ Transaction log server
 flush time: how maximum time we can wait data before force flush  
 max size: maximum database size before force flush
 
-### Enrty log structure:
+### Tlog Aggregation structure:
+Tlog aggregation per volume
 ```
-Name (Text)
-Size (uint64)
+Name (Text)        // unused now
+Size (uint64)      // number of blocks
 Timestamp (uint64)
-Blocks:
-  Size (uint64)
-  Header (Not defined)
-  CRC32 (uint32)
-  Data (Variable size Data)
+Volume ID (uint32)
+Blocks: List(Block)
 ```
 
 ## Workflow during flush
