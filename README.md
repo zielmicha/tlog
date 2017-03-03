@@ -1,8 +1,6 @@
 # GIG TLOG 
 Transaction log server
 
-# [Specs from Maxime](https://github.com/g8os/tlog/blob/master/SPECS.md)
-
 ## TLOG Client
 
 - TLOG Client library is a client lib that works on GIG BLOCKSTOR (NBD Server)
