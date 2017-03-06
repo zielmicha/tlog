@@ -7,6 +7,7 @@
 #include "core/bitops.hh"
 #include "core/sleep.hh"
 
+#include <stdio.h>
 #include "tlog_schema.capnp.h"
 #include <capnp/message.h>
 #include <kj/io.h>
@@ -50,7 +51,7 @@ const int K = 4;
 const int M = 2;
 
 /* number of extra bytes for capnp aggregation encoding */
-const capnp_outbuf_extra = 200;
+const int capnp_outbuf_extra = 200;
 
 struct system_stats {
     uint32_t _curr_connections {};
@@ -134,6 +135,9 @@ public:
 
 	/* flush the packets to it's storage */
 	void flush(uint32_t volID, int k, int m) {
+		if (!ok_to_flush(volID)) {
+			return;
+		}
 		// create aggregation object
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogAggregation>();
@@ -190,8 +194,8 @@ public:
 		er.encode(inputs, coding, chunksize);
 
 		int hash_len = 32;
-		uint8_t *hash = hash_gen(bs.begin(), bs.size(), hash_len);
-		storeEncodedAgg(hash, hash_len, inputs, coding, k, m, chunksize);
+		uint8_t *hash = hash_gen(volID, bs.begin(), bs.size(), hash_len);
+		storeEncodedAgg(volID, hash, hash_len, inputs, coding, k, m, chunksize);
 		free(hash);
 		
 		
@@ -203,10 +207,20 @@ public:
 		free(coding);
 	}
 
+private:
+	/** 
+	 * check if it is ok to flush to storage
+	 * 1. first tlog is one after last flush
+	 * 2. we have all sequences neded
+	 * 3. we need to handle if sequence number reset to 0
+	 */
+	bool ok_to_flush(uint32_t volID) {
+		return true;
+	}
 	/**
 	 * store erasure encoded data to redis-compatible server
 	 */
-	void storeEncodedAgg(uint8_t *hash, int hash_len, 
+	void storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len, 
 			unsigned char **data, unsigned char **coding, int k, int m, int chunksize) {
 		// TODO make it async
 		// store the data
@@ -217,8 +231,9 @@ public:
 		for (int i=0; i < m; i++) {
 			store(_objstor_addr, _objstor_port + k + i + 1, hash, hash_len, coding[i], chunksize);
 		}
-		std::string last = "last_encoded";
+		std::string last = "last_hash_" + std::to_string(vol_id);
 		store(_objstor_addr, _objstor_port, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
+		std::cout << "last hash = " << last << "\n";
 	}
 
 
@@ -234,19 +249,51 @@ public:
 		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
 
 		// TODO : check reply and raise exception in case of error
-
 		freeReplyObject(reply);
 		redisFree(c);
 	}
 
-private:
-	uint8_t* hash_gen(uint8_t *data, uint8_t data_len, int hash_len) {
+	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len, int hash_len) {
 		uint8_t *hash = (uint8_t *) malloc(sizeof(uint8_t) * hash_len);
-		if (blake2bp(hash, data, _priv_key.c_str(), hash_len, data_len, _priv_key.length()) != 0) {
+		uint8_t key[50];
+		int key_len;
+
+		get_hash_key(vol_id, key, &key_len);
+
+		if (blake2bp(hash, data, key, hash_len, data_len, key_len) != 0) {
 			std::cerr << "failed to hash\n";
 			exit(1); // TODO : better error handling
 		}
 		return hash;
+	}
+
+	/**
+	 * get hash(1) key.
+	 * use last hash or priv_key if we dont have last hash.
+	 * TODO : cache it in memory
+	 */ 
+	void get_hash_key(uint32_t volID, uint8_t *key, int *key_len) {
+		redisContext *c;
+		redisReply *reply;
+
+		c = redisConnect(_objstor_addr.c_str(), _objstor_port);
+		reply = (redisReply *)redisCommand(c, "GET last_hash_%u", volID);
+
+		// if there is no last hash, use priv key
+		if (reply->type == REDIS_REPLY_NIL) {
+			std::cout << "there is no last hash for vol " << volID << ". use priv key\n";
+			memcpy(key, _priv_key.c_str(), _priv_key.length());
+			*key_len = _priv_key.length();
+			freeReplyObject(reply);
+			redisFree(c);
+			return;
+		}
+		// TODO : handle other error types
+
+		memcpy(key, reply->str, reply->len);
+		*key_len = reply->len;
+		freeReplyObject(reply);
+		redisFree(c);
 	}
 
 	TlogBlock::Reader decodeBlock(uint8_t *encoded, int len) {
@@ -349,9 +396,9 @@ public:
 	void addPacket(uint8_t *packet) {
 		// get volume ID
 		uint32_t volID;
-		memcpy(&volID, packet + 16, sizeof(volID));
-		volID = ntohs(volID);
-
+		memcpy(&volID, packet + 16, 4);
+		//volID = ntohl(volID);
+		
 		// initialize  semaphore if needed
 		if (gSem.find(volID) == gSem.end()) {
 			semaphore *sem = new semaphore(1);
