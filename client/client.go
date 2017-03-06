@@ -27,12 +27,12 @@ func New(addr string) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Send(volID, seq, crc32 uint32, lba uint64, data []byte) error {
+func (c *Client) Send(volID, seq, crc32 uint32, lba, timestamp uint64, data []byte) error {
 	if len(data) != 1024*16 {
 		return ErrInvalidDataLen
 	}
 
-	b, err := buildCapnp(volID, seq, crc32, lba, data)
+	b, err := buildCapnp(volID, seq, crc32, lba, timestamp, data)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (c *Client) Send(volID, seq, crc32 uint32, lba uint64, data []byte) error {
 	return err
 }
 
-func buildCapnp(volID, seq, crc uint32, lba uint64, data []byte) ([]byte, error) {
+func buildCapnp(volID, seq, crc uint32, lba, timestamp uint64, data []byte) ([]byte, error) {
 	msg, seg, err := capnp.NewMessage(capnp.MultiSegment(nil))
 	if err != nil {
 		return nil, fmt.Errorf("build capnp:%v", err)
@@ -55,6 +55,7 @@ func buildCapnp(volID, seq, crc uint32, lba uint64, data []byte) ([]byte, error)
 	block.SetSequence(seq)
 	block.SetLba(lba)
 	block.SetCrc32(crc)
+	block.SetTimestamp(timestamp)
 	block.SetSize(uint32(len(data)))
 	block.SetData(data)
 

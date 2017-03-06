@@ -29,7 +29,7 @@ func main() {
 			defer wg.Done()
 			client := clients[j%num_conn]
 
-			err := client.Send(volID, uint32(j), uint32(j), uint64(j), data)
+			err := client.Send(volID, uint32(j), uint32(j), uint64(j), uint64(j), data)
 			if err != nil {
 				log.Fatalf("failed to send :%v", err)
 			}
