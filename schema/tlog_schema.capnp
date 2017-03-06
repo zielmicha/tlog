@@ -11,10 +11,10 @@ struct TlogBlock {
 }
 
 struct TlogAggregation {
-	name @0 :Text; // unused now
-	size @1 :UInt64; // number of blocks in this aggregation
+	name @0 :Text; # unused now
+	size @1 :UInt64; # number of blocks in this aggregation
 	timestamp @2 :UInt64;
 	volumeId @3 :UInt32;
 	blocks @4 :List(TlogBlock);
-	prev @5 :Text; // hash of the previous aggregation
+	prev @5 :Text; # hash of the previous aggregation
 }
