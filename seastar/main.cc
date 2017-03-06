@@ -36,7 +36,7 @@ namespace tlog {
 using clock_type = lowres_clock;
 
 /* map of packets queue, one per volume ID */
-static std::map<uint32_t, std::queue<uint8_t *>> gPackets;
+static std::map<uint32_t, std::map<uint32_t, uint8_t *>> gPackets;
 
 /* map of semaphore, one per volume ID */
 static std::map<uint32_t, semaphore*> gSem;
@@ -157,15 +157,20 @@ public:
 
 		// build the aggregation blocks
 		auto blocks = agg.initBlocks(gPackets[volID].size());
-		for (int i =0; !gPackets[volID].empty(); i++) {
-			auto packet = gPackets[volID].front();
-			gPackets[volID].pop();
 
-			auto blockBuilder = blocks[i];
-			encodeBlock(packet, BUF_SIZE, &blockBuilder);
-			std::cout << " block seq= " << blockBuilder.getSequence() << "\n";
-			free(packet);
+		auto packetsMap = gPackets[volID];
+		int i = 0;
+		for (auto it : packetsMap) {
+			if (i++ >= FLUSH_SIZE) {
+				break;
+			}
+			auto block = blocks[i];
+			encodeBlock(it.second, BUF_SIZE, &block);
+			gPackets[volID].erase(it.first);
+			std::cerr << " seq # " << it.first << ".seq block= " << block.getSequence() << "\n";
+			free(it.second);
 		}
+
 
 		// encode it
 		int outbufSize = (agg.getSize() * BUF_SIZE) + capnp_outbuf_extra;
@@ -208,7 +213,8 @@ public:
 		storeEncodedAgg(volID, hash, hash_len, inputs, coding, k, m, chunksize);
 		free(hash);
 		
-		
+	
+		// cleanup erasure coding data
 		free(inputs[k-1]);
 		free(inputs);
 		for(int i=0; i < m; i++) {
@@ -225,6 +231,17 @@ private:
 	 * 3. we need to handle if sequence number reset to 0
 	 */
 	bool ok_to_flush(uint32_t volID) {
+		auto packetsMap = gPackets[volID];
+		auto it = packetsMap.cbegin();
+		auto prev = it->first;
+		++it;
+		while (it != packetsMap.cend()) {
+			if (it->first != prev + 1) {
+				return false;
+			}
+			prev = it->first;
+			++it;
+		}
 		return true;
 	}
 	/**
@@ -402,17 +419,20 @@ public:
 	void addPacket(uint8_t *packet) {
 		// get volume ID
 		uint32_t volID;
+		uint32_t seq;
 		memcpy(&volID, packet + 24, 4);
+		memcpy(&seq, packet + 28, 4);
 
 		// initialize  semaphore if needed
 		if (gSem.find(volID) == gSem.end()) {
 			semaphore *sem = new semaphore(1);
 			gSem.emplace(volID, sem);
 		}
-
+		
 		// push the packets and flush if needed
+		// TODO : do better locking
 		gSem.at(volID)->wait();
-		gPackets[volID].push(packet);
+		gPackets[volID].insert({seq, packet});
 		if (gPackets[volID].size() >= FLUSH_SIZE) {
 			Flusher f(_objstor_addr, _objstor_port, _priv_key);
 			f.flush(volID, K, M);
@@ -439,7 +459,7 @@ int main(int ac, char** av) {
 		
 		// TODO : make thse configs configurable
         uint16_t port = 11211;
-		std::string objstor_addr = "192.168.0.101";
+		std::string objstor_addr = "192.168.1.4";
 		int objstor_port = 16379;
 		std::string priv_key = "my-secret-key";
 

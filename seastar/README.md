@@ -28,3 +28,12 @@ export SEASTAR=YOUR_SEASTAR_DIR
 ./build.sh
 ```
 
+## TODO
+
+- add options for objstor addr & port
+- add options to specify K & M value of erasure encoding (currently hardcoded to 4 & 2)
+- improve locking (if tlog server flush volume's tlog, it currently can't receive tlog 
+  for that volume)
+- add compression
+- add encryption
+- add proper logging
