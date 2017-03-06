@@ -29,7 +29,7 @@ struct TlogBlock {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(8cf178de3c82d431, 1, 2)
+    CAPNP_DECLARE_STRUCT_HEADER(8cf178de3c82d431, 4, 1)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand = &schema->defaultBrand;
     #endif  // !CAPNP_LITE
@@ -44,7 +44,7 @@ struct TlogAggregation {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(e46ab5b4b619e094, 2, 2)
+    CAPNP_DECLARE_STRUCT_HEADER(e46ab5b4b619e094, 3, 3)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand = &schema->defaultBrand;
     #endif  // !CAPNP_LITE
@@ -70,15 +70,20 @@ public:
   }
 #endif  // !CAPNP_LITE
 
+  inline  ::uint32_t getVolumeId() const;
+
   inline  ::uint32_t getSequence() const;
+
+  inline  ::uint64_t getLba() const;
 
   inline  ::uint32_t getSize() const;
 
-  inline bool hasCrc() const;
-  inline  ::capnp::Text::Reader getCrc() const;
+  inline  ::uint32_t getCrc32() const;
 
   inline bool hasData() const;
   inline  ::capnp::Data::Reader getData() const;
+
+  inline  ::uint64_t getTimestamp() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -108,18 +113,20 @@ public:
   inline ::kj::StringTree toString() const { return asReader().toString(); }
 #endif  // !CAPNP_LITE
 
+  inline  ::uint32_t getVolumeId();
+  inline void setVolumeId( ::uint32_t value);
+
   inline  ::uint32_t getSequence();
   inline void setSequence( ::uint32_t value);
+
+  inline  ::uint64_t getLba();
+  inline void setLba( ::uint64_t value);
 
   inline  ::uint32_t getSize();
   inline void setSize( ::uint32_t value);
 
-  inline bool hasCrc();
-  inline  ::capnp::Text::Builder getCrc();
-  inline void setCrc( ::capnp::Text::Reader value);
-  inline  ::capnp::Text::Builder initCrc(unsigned int size);
-  inline void adoptCrc(::capnp::Orphan< ::capnp::Text>&& value);
-  inline ::capnp::Orphan< ::capnp::Text> disownCrc();
+  inline  ::uint32_t getCrc32();
+  inline void setCrc32( ::uint32_t value);
 
   inline bool hasData();
   inline  ::capnp::Data::Builder getData();
@@ -127,6 +134,9 @@ public:
   inline  ::capnp::Data::Builder initData(unsigned int size);
   inline void adoptData(::capnp::Orphan< ::capnp::Data>&& value);
   inline ::capnp::Orphan< ::capnp::Data> disownData();
+
+  inline  ::uint64_t getTimestamp();
+  inline void setTimestamp( ::uint64_t value);
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -178,8 +188,13 @@ public:
 
   inline  ::uint64_t getTimestamp() const;
 
+  inline  ::uint32_t getVolumeId() const;
+
   inline bool hasBlocks() const;
   inline  ::capnp::List< ::TlogBlock>::Reader getBlocks() const;
+
+  inline bool hasPrev() const;
+  inline  ::capnp::Text::Reader getPrev() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -222,12 +237,22 @@ public:
   inline  ::uint64_t getTimestamp();
   inline void setTimestamp( ::uint64_t value);
 
+  inline  ::uint32_t getVolumeId();
+  inline void setVolumeId( ::uint32_t value);
+
   inline bool hasBlocks();
   inline  ::capnp::List< ::TlogBlock>::Builder getBlocks();
   inline void setBlocks( ::capnp::List< ::TlogBlock>::Reader value);
   inline  ::capnp::List< ::TlogBlock>::Builder initBlocks(unsigned int size);
   inline void adoptBlocks(::capnp::Orphan< ::capnp::List< ::TlogBlock>>&& value);
   inline ::capnp::Orphan< ::capnp::List< ::TlogBlock>> disownBlocks();
+
+  inline bool hasPrev();
+  inline  ::capnp::Text::Builder getPrev();
+  inline void setPrev( ::capnp::Text::Reader value);
+  inline  ::capnp::Text::Builder initPrev(unsigned int size);
+  inline void adoptPrev(::capnp::Orphan< ::capnp::Text>&& value);
+  inline ::capnp::Orphan< ::capnp::Text> disownPrev();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -257,96 +282,120 @@ private:
 
 // =======================================================================================
 
-inline  ::uint32_t TlogBlock::Reader::getSequence() const {
+inline  ::uint32_t TlogBlock::Reader::getVolumeId() const {
   return _reader.getDataField< ::uint32_t>(
       0 * ::capnp::ELEMENTS);
 }
 
-inline  ::uint32_t TlogBlock::Builder::getSequence() {
+inline  ::uint32_t TlogBlock::Builder::getVolumeId() {
   return _builder.getDataField< ::uint32_t>(
       0 * ::capnp::ELEMENTS);
 }
-inline void TlogBlock::Builder::setSequence( ::uint32_t value) {
+inline void TlogBlock::Builder::setVolumeId( ::uint32_t value) {
   _builder.setDataField< ::uint32_t>(
       0 * ::capnp::ELEMENTS, value);
 }
 
-inline  ::uint32_t TlogBlock::Reader::getSize() const {
+inline  ::uint32_t TlogBlock::Reader::getSequence() const {
   return _reader.getDataField< ::uint32_t>(
       1 * ::capnp::ELEMENTS);
 }
 
-inline  ::uint32_t TlogBlock::Builder::getSize() {
+inline  ::uint32_t TlogBlock::Builder::getSequence() {
   return _builder.getDataField< ::uint32_t>(
       1 * ::capnp::ELEMENTS);
 }
-inline void TlogBlock::Builder::setSize( ::uint32_t value) {
+inline void TlogBlock::Builder::setSequence( ::uint32_t value) {
   _builder.setDataField< ::uint32_t>(
       1 * ::capnp::ELEMENTS, value);
 }
 
-inline bool TlogBlock::Reader::hasCrc() const {
-  return !_reader.getPointerField(0 * ::capnp::POINTERS).isNull();
+inline  ::uint64_t TlogBlock::Reader::getLba() const {
+  return _reader.getDataField< ::uint64_t>(
+      1 * ::capnp::ELEMENTS);
 }
-inline bool TlogBlock::Builder::hasCrc() {
-  return !_builder.getPointerField(0 * ::capnp::POINTERS).isNull();
+
+inline  ::uint64_t TlogBlock::Builder::getLba() {
+  return _builder.getDataField< ::uint64_t>(
+      1 * ::capnp::ELEMENTS);
 }
-inline  ::capnp::Text::Reader TlogBlock::Reader::getCrc() const {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(
-      _reader.getPointerField(0 * ::capnp::POINTERS));
+inline void TlogBlock::Builder::setLba( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      1 * ::capnp::ELEMENTS, value);
 }
-inline  ::capnp::Text::Builder TlogBlock::Builder::getCrc() {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(
-      _builder.getPointerField(0 * ::capnp::POINTERS));
+
+inline  ::uint32_t TlogBlock::Reader::getSize() const {
+  return _reader.getDataField< ::uint32_t>(
+      4 * ::capnp::ELEMENTS);
 }
-inline void TlogBlock::Builder::setCrc( ::capnp::Text::Reader value) {
-  ::capnp::_::PointerHelpers< ::capnp::Text>::set(
-      _builder.getPointerField(0 * ::capnp::POINTERS), value);
+
+inline  ::uint32_t TlogBlock::Builder::getSize() {
+  return _builder.getDataField< ::uint32_t>(
+      4 * ::capnp::ELEMENTS);
 }
-inline  ::capnp::Text::Builder TlogBlock::Builder::initCrc(unsigned int size) {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(
-      _builder.getPointerField(0 * ::capnp::POINTERS), size);
+inline void TlogBlock::Builder::setSize( ::uint32_t value) {
+  _builder.setDataField< ::uint32_t>(
+      4 * ::capnp::ELEMENTS, value);
 }
-inline void TlogBlock::Builder::adoptCrc(
-    ::capnp::Orphan< ::capnp::Text>&& value) {
-  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(
-      _builder.getPointerField(0 * ::capnp::POINTERS), kj::mv(value));
+
+inline  ::uint32_t TlogBlock::Reader::getCrc32() const {
+  return _reader.getDataField< ::uint32_t>(
+      5 * ::capnp::ELEMENTS);
 }
-inline ::capnp::Orphan< ::capnp::Text> TlogBlock::Builder::disownCrc() {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(
-      _builder.getPointerField(0 * ::capnp::POINTERS));
+
+inline  ::uint32_t TlogBlock::Builder::getCrc32() {
+  return _builder.getDataField< ::uint32_t>(
+      5 * ::capnp::ELEMENTS);
+}
+inline void TlogBlock::Builder::setCrc32( ::uint32_t value) {
+  _builder.setDataField< ::uint32_t>(
+      5 * ::capnp::ELEMENTS, value);
 }
 
 inline bool TlogBlock::Reader::hasData() const {
-  return !_reader.getPointerField(1 * ::capnp::POINTERS).isNull();
+  return !_reader.getPointerField(0 * ::capnp::POINTERS).isNull();
 }
 inline bool TlogBlock::Builder::hasData() {
-  return !_builder.getPointerField(1 * ::capnp::POINTERS).isNull();
+  return !_builder.getPointerField(0 * ::capnp::POINTERS).isNull();
 }
 inline  ::capnp::Data::Reader TlogBlock::Reader::getData() const {
   return ::capnp::_::PointerHelpers< ::capnp::Data>::get(
-      _reader.getPointerField(1 * ::capnp::POINTERS));
+      _reader.getPointerField(0 * ::capnp::POINTERS));
 }
 inline  ::capnp::Data::Builder TlogBlock::Builder::getData() {
   return ::capnp::_::PointerHelpers< ::capnp::Data>::get(
-      _builder.getPointerField(1 * ::capnp::POINTERS));
+      _builder.getPointerField(0 * ::capnp::POINTERS));
 }
 inline void TlogBlock::Builder::setData( ::capnp::Data::Reader value) {
   ::capnp::_::PointerHelpers< ::capnp::Data>::set(
-      _builder.getPointerField(1 * ::capnp::POINTERS), value);
+      _builder.getPointerField(0 * ::capnp::POINTERS), value);
 }
 inline  ::capnp::Data::Builder TlogBlock::Builder::initData(unsigned int size) {
   return ::capnp::_::PointerHelpers< ::capnp::Data>::init(
-      _builder.getPointerField(1 * ::capnp::POINTERS), size);
+      _builder.getPointerField(0 * ::capnp::POINTERS), size);
 }
 inline void TlogBlock::Builder::adoptData(
     ::capnp::Orphan< ::capnp::Data>&& value) {
   ::capnp::_::PointerHelpers< ::capnp::Data>::adopt(
-      _builder.getPointerField(1 * ::capnp::POINTERS), kj::mv(value));
+      _builder.getPointerField(0 * ::capnp::POINTERS), kj::mv(value));
 }
 inline ::capnp::Orphan< ::capnp::Data> TlogBlock::Builder::disownData() {
   return ::capnp::_::PointerHelpers< ::capnp::Data>::disown(
-      _builder.getPointerField(1 * ::capnp::POINTERS));
+      _builder.getPointerField(0 * ::capnp::POINTERS));
+}
+
+inline  ::uint64_t TlogBlock::Reader::getTimestamp() const {
+  return _reader.getDataField< ::uint64_t>(
+      3 * ::capnp::ELEMENTS);
+}
+
+inline  ::uint64_t TlogBlock::Builder::getTimestamp() {
+  return _builder.getDataField< ::uint64_t>(
+      3 * ::capnp::ELEMENTS);
+}
+inline void TlogBlock::Builder::setTimestamp( ::uint64_t value) {
+  _builder.setDataField< ::uint64_t>(
+      3 * ::capnp::ELEMENTS, value);
 }
 
 inline bool TlogAggregation::Reader::hasName() const {
@@ -409,6 +458,20 @@ inline void TlogAggregation::Builder::setTimestamp( ::uint64_t value) {
       1 * ::capnp::ELEMENTS, value);
 }
 
+inline  ::uint32_t TlogAggregation::Reader::getVolumeId() const {
+  return _reader.getDataField< ::uint32_t>(
+      4 * ::capnp::ELEMENTS);
+}
+
+inline  ::uint32_t TlogAggregation::Builder::getVolumeId() {
+  return _builder.getDataField< ::uint32_t>(
+      4 * ::capnp::ELEMENTS);
+}
+inline void TlogAggregation::Builder::setVolumeId( ::uint32_t value) {
+  _builder.setDataField< ::uint32_t>(
+      4 * ::capnp::ELEMENTS, value);
+}
+
 inline bool TlogAggregation::Reader::hasBlocks() const {
   return !_reader.getPointerField(1 * ::capnp::POINTERS).isNull();
 }
@@ -439,6 +502,38 @@ inline void TlogAggregation::Builder::adoptBlocks(
 inline ::capnp::Orphan< ::capnp::List< ::TlogBlock>> TlogAggregation::Builder::disownBlocks() {
   return ::capnp::_::PointerHelpers< ::capnp::List< ::TlogBlock>>::disown(
       _builder.getPointerField(1 * ::capnp::POINTERS));
+}
+
+inline bool TlogAggregation::Reader::hasPrev() const {
+  return !_reader.getPointerField(2 * ::capnp::POINTERS).isNull();
+}
+inline bool TlogAggregation::Builder::hasPrev() {
+  return !_builder.getPointerField(2 * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Text::Reader TlogAggregation::Reader::getPrev() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(
+      _reader.getPointerField(2 * ::capnp::POINTERS));
+}
+inline  ::capnp::Text::Builder TlogAggregation::Builder::getPrev() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(
+      _builder.getPointerField(2 * ::capnp::POINTERS));
+}
+inline void TlogAggregation::Builder::setPrev( ::capnp::Text::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::set(
+      _builder.getPointerField(2 * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Text::Builder TlogAggregation::Builder::initPrev(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(
+      _builder.getPointerField(2 * ::capnp::POINTERS), size);
+}
+inline void TlogAggregation::Builder::adoptPrev(
+    ::capnp::Orphan< ::capnp::Text>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(
+      _builder.getPointerField(2 * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Text> TlogAggregation::Builder::disownPrev() {
+  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(
+      _builder.getPointerField(2 * ::capnp::POINTERS));
 }
 
 

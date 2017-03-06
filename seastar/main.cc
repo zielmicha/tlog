@@ -138,18 +138,15 @@ private:
         }
     };
 public:
-    tcp_server(distributed<system_stats>& system_stats, int objstor_port,
-			uint16_t port = 11211)
+    tcp_server(distributed<system_stats>& system_stats, std::string objstor_addr, 
+			int objstor_port, std::string priv_key, uint16_t port = 11211)
         : _system_stats(system_stats)
-		//, _objstor_addr(objstor_addr)
+		, _objstor_addr(objstor_addr)
 		, _objstor_port(objstor_port)
-		//, _priv_key(priv_key)
+		, _priv_key(priv_key)
         , _port(port)
     {
-		_objstor_addr = "192.168.0.100";
-		_objstor_port = 16379;
-		_priv_key = "my-secret-key";
-		std::cout << "start tlog with port = " << _port << ". objstor port = " << _objstor_port << "\n";
+		std::cout << "start tlog with objstor_addr = " << _objstor_addr << ". objstor port = " << _objstor_port << "\n";
 	}
 
     void start() {
@@ -316,7 +313,7 @@ private:
 	void encodeBlock(TlogBlock::Reader reader, TlogBlock::Builder* builder) {
 		builder->setSequence(reader.getSequence());
 		builder->setSize(reader.getSize());
-		builder->setCrc(reader.getCrc());
+		builder->setCrc32(reader.getCrc32());
 		builder->setData(reader.getData());
 	}
 };
@@ -337,15 +334,16 @@ int main(int ac, char** av) {
 		
 		// TODO : make thse configs configurable
         uint16_t port = 11211;
-		//std::string objstor_addr = "192.168.0.100";
+		std::string objstor_addr = "192.168.0.101";
 		int objstor_port = 16379;
-		//std::string priv_key = "my-secret-key";
+		std::string priv_key = "my-secret-key";
 
         return system_stats.start(tlog::clock_type::now()).then([&] {
             std::cout << PLATFORM << " tlog " << VERSION << "\n";
             return make_ready_future<>();
-        }).then([&, port] {
-            return tcp_server.start(std::ref(system_stats), objstor_port, port);
+        }).then([&, port, objstor_port, objstor_addr, priv_key] {
+            return tcp_server.start(std::ref(system_stats), objstor_addr, objstor_port, 
+					priv_key, port);
         }).then([&tcp_server] {
             return tcp_server.invoke_on_all(&tlog::tcp_server::start);
         }).then([start_stats = config.count("stats")] {
