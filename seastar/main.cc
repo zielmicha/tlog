@@ -21,6 +21,7 @@
 #include <blake2.h>
 #include <isa-l/erasure_code.h>
 #include <assert.h>
+#include <map>
 
 #define PLATFORM "seastar"
 #define VERSION "v1.0"
@@ -33,10 +34,13 @@ namespace tlog {
 
 using clock_type = lowres_clock;
 
-static std::queue<uint8_t *> gPackets;
-static	semaphore gSem{1};
+/* map of packets queue, one per volume ID */
+static std::map<uint32_t, std::queue<uint8_t *>> gPackets;
 
-const int buf_size = 4144; /* size of the message we receive from client */
+/* map of semaphore, one per volume ID */
+static std::map<uint32_t, semaphore*> gSem;
+
+const int buf_size = 4152; /* size of the message we receive from client */
 const int FLUSH_SIZE = 10;
 const int K = 4;
 const int M = 2;
@@ -157,7 +161,7 @@ public:
             return _listener->accept().then([this] (connected_socket fd, socket_address addr) mutable {
                 auto conn = make_lw_shared<connection>(std::move(fd), addr, _system_stats);
                 do_until([conn] { return conn->_in.eof(); }, [this, conn] {
-                    return this->myhandle(conn->_in, conn->_out).then([conn] {
+                    return this->handle(conn->_in, conn->_out).then([conn] {
                         return conn->_out.flush();
                     });
                 }).finally([conn] {
@@ -168,8 +172,11 @@ public:
     }
 
     future<> stop() { return make_ready_future<>(); }
-	
-	future<> myhandle(input_stream<char>& in, output_stream<char>& out) {
+
+	/**
+	 * handle incoming packet
+	 */
+	future<> handle(input_stream<char>& in, output_stream<char>& out) {
     	return repeat([this, &out, &in] {
         	return in.read_exactly(buf_size).then( [this, &out] (temporary_buffer<char> buf) {
             	if (buf) {
@@ -187,28 +194,41 @@ public:
 
 	}
 	void addPacket(uint8_t *packet) {
-		gSem.wait();
-		gPackets.push(packet);
-		std::cout << "-> packets size= " << gPackets.size() << "\n";
-		if (gPackets.size() >= FLUSH_SIZE) {
-			this->flush();
+		// get volume ID
+		uint32_t volID;
+		memcpy(&volID, packet + 16, sizeof(volID));
+		volID = ntohs(volID);
+
+		// initialize  semaphore if needed
+		if (gSem.find(volID) == gSem.end()) {
+			semaphore *sem = new semaphore(1);
+			gSem.emplace(volID, sem);
 		}
-		gSem.signal();
+
+		// push the packets and flush if needed
+		gSem.at(volID)->wait();
+		gPackets[volID].push(packet);
+		if (gPackets[volID].size() >= FLUSH_SIZE) {
+			std::cout << "need to flush\n";
+			flush(volID);
+		}
+		gSem.at(volID)->signal();
 	}
 
 private:
-	void flush() {
+	/* flush the packets to it's storage */
+	void flush(uint32_t volID) {
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogAggregation>();
 		
-		agg.setSize(gPackets.size());
-		agg.setName("my aggregation v5");
+		agg.setSize(gPackets[volID].size());
+		agg.setName("my aggregation v0");
 
 		// build the blocks
-		auto blocks = agg.initBlocks(gPackets.size());
-		for (int i =0; !gPackets.empty(); i++) {
-			auto encoded = gPackets.front();
-			gPackets.pop();
+		auto blocks = agg.initBlocks(gPackets[volID].size());
+		for (int i =0; !gPackets[volID].empty(); i++) {
+			auto encoded = gPackets[volID].front();
+			gPackets[volID].pop();
 
 			auto blockReader = this->decodeBlock(encoded, buf_size);
 			auto blockBuilder = blocks[i];
@@ -216,7 +236,6 @@ private:
 			free(encoded);
 		}
 
-	
 		// encode it again
 		int outbufSize = (agg.getSize() * buf_size) + 100;
 		kj::byte outbuf[outbufSize];
@@ -226,7 +245,7 @@ private:
 		kj::ArrayPtr<kj::byte> bs = aos.getArray();
 		std::cout << "encoded msg len = " << bs.size() << ". outbuf size = " << outbufSize << "\n";
 
-		/** erasure coded it and send the pieces to separate ardb server **/
+		// erasure coded it and send the pieces to separate ardb server
 		int k = K;
 		int m = M;
 		Erasurer er(k, m);
@@ -311,6 +330,7 @@ private:
 	}
 
 	void encodeBlock(TlogBlock::Reader reader, TlogBlock::Builder* builder) {
+		builder->setVolumeId(reader.getVolumeId());
 		builder->setSequence(reader.getSequence());
 		builder->setSize(reader.getSize());
 		builder->setCrc32(reader.getCrc32());
