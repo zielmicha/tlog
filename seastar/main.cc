@@ -113,6 +113,152 @@ public:
 	}
 };
 
+class Flusher {
+private:
+	std::string _objstor_addr;
+	int _objstor_port;
+	std::string _priv_key;
+public:
+	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key)
+	: _objstor_addr(objstor_addr)
+	, _objstor_port(objstor_port)
+	, _priv_key(priv_key)
+	{}
+
+	/* flush the packets to it's storage */
+	void flush(uint32_t volID, int k, int m) {
+		// create aggregation object
+		::capnp::MallocMessageBuilder msg;
+		auto agg = msg.initRoot<TlogAggregation>();
+		
+		agg.setSize(gPackets[volID].size());
+		agg.setName("my aggregation v1");
+
+		// build the aggregation blocks
+		auto blocks = agg.initBlocks(gPackets[volID].size());
+		for (int i =0; !gPackets[volID].empty(); i++) {
+			auto packet = gPackets[volID].front();
+			gPackets[volID].pop();
+
+			auto blockReader = this->decodeBlock(packet, buf_size);
+			auto blockBuilder = blocks[i];
+			this->encodeBlock(blockReader, &blockBuilder);
+			free(packet);
+		}
+
+		// encode it
+		int outbufSize = (agg.getSize() * buf_size) + 100;
+		kj::byte outbuf[outbufSize];
+		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
+		writeMessage(aos, msg);
+		
+		kj::ArrayPtr<kj::byte> bs = aos.getArray();
+
+		// erasure encoding
+		Erasurer er(k, m);
+		int chunksize = er.chunksize(bs.size());
+		
+		// build the inputs for erasure coding
+		unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * k);
+		for (int i=0; i < k; i++) {
+			int to_copy = i == k -1 ? bs.size() - (chunksize * (k-1)) : chunksize;
+			if (i != k -1) {
+				// we can simply use pointer
+				inputs[i] =  bs.begin() + (chunksize * i);
+			} else {
+				// we need to do memcpy here because
+				// we might need to add padding to last part
+				inputs[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
+				memcpy(inputs[i], bs.begin() + (chunksize * i), to_copy);
+			}
+		}
+
+		// allocate coding result
+		unsigned char **coding = (unsigned char **) malloc(sizeof(unsigned char *) * m);
+		for (int i=0; i < m; i++) {
+			coding[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
+		}
+
+		er.encode(inputs, coding, chunksize);
+
+		int hash_len = 32;
+		uint8_t *hash = hash_gen(bs.begin(), bs.size(), hash_len);
+		storeEncodedAgg(hash, hash_len, inputs, coding, k, m, chunksize);
+		free(hash);
+		
+		
+		free(inputs[k-1]);
+		free(inputs);
+		for(int i=0; i < m; i++) {
+			free(coding[i]);
+		}
+		free(coding);
+	}
+
+	/**
+	 * store erasure encoded data to redis-compatible server
+	 */
+	void storeEncodedAgg(uint8_t *hash, int hash_len, 
+			unsigned char **data, unsigned char **coding, int k, int m, int chunksize) {
+		// TODO make it async
+		// store the data
+		for (int i=0; i < k; i++) {
+			store(_objstor_addr, _objstor_port + i + 1, hash, hash_len, data[i], chunksize);
+		}
+		// store the coded data
+		for (int i=0; i < m; i++) {
+			store(_objstor_addr, _objstor_port + k + i + 1, hash, hash_len, coding[i], chunksize);
+		}
+		std::string last = "last_encoded";
+		store(_objstor_addr, _objstor_port, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
+	}
+
+
+	/**
+	 * store data to redis compatible server
+	 */
+	void store(std::string redis_addr, int redis_port, uint8_t *key, int key_len, unsigned char *data, int data_len) {
+		redisContext *c;
+		redisReply *reply;
+
+		// TODO : make persistent connection to redis
+		c = redisConnect(redis_addr.c_str(), redis_port);
+		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
+
+		// TODO : check reply and raise exception in case of error
+		std::cout << "store " << data_len << " bytes to redis " << redis_port <<" \n";
+
+		freeReplyObject(reply);
+		redisFree(c);
+	}
+
+private:
+	uint8_t* hash_gen(uint8_t *data, uint8_t data_len, int hash_len) {
+		uint8_t *hash = (uint8_t *) malloc(sizeof(uint8_t) * hash_len);
+		if (blake2bp(hash, data, _priv_key.c_str(), hash_len, data_len, _priv_key.length()) != 0) {
+			std::cerr << "failed to hash\n";
+			exit(1); // TODO : better error handling
+		}
+		return hash;
+	}
+
+	TlogBlock::Reader decodeBlock(uint8_t *encoded, int len) {
+		auto apt = kj::ArrayPtr<kj::byte>(encoded, len);
+		kj::ArrayInputStream ais(apt);
+		::capnp::MallocMessageBuilder message;
+		readMessageCopy(ais, message);
+		return message.getRoot<TlogBlock>();
+	}
+
+	void encodeBlock(TlogBlock::Reader reader, TlogBlock::Builder* builder) {
+		builder->setVolumeId(reader.getVolumeId());
+		builder->setSequence(reader.getSequence());
+		builder->setSize(reader.getSize());
+		builder->setCrc32(reader.getCrc32());
+		builder->setData(reader.getData());
+	}
+
+};
 class tcp_server {
 private:
     lw_shared_ptr<server_socket> _listener;
@@ -181,7 +327,7 @@ public:
         	return in.read_exactly(buf_size).then( [this, &out] (temporary_buffer<char> buf) {
             	if (buf) {
 					uint8_t *packet = (uint8_t *) malloc(buf.size());
-					memcpy(packet, buf.get(), buf.size()); // TODO : find a way to avoid copying
+					memcpy(packet, buf.get(), buf.size());
 					this->addPacket(packet);
                 	return make_ready_future<stop_iteration>(stop_iteration::no);
             	} else {
@@ -209,133 +355,13 @@ public:
 		gSem.at(volID)->wait();
 		gPackets[volID].push(packet);
 		if (gPackets[volID].size() >= FLUSH_SIZE) {
-			std::cout << "need to flush\n";
-			flush(volID);
+			Flusher f(_objstor_addr, _objstor_port, _priv_key);
+			f.flush(volID, K, M);
 		}
 		gSem.at(volID)->signal();
 	}
 
 private:
-	/* flush the packets to it's storage */
-	void flush(uint32_t volID) {
-		::capnp::MallocMessageBuilder msg;
-		auto agg = msg.initRoot<TlogAggregation>();
-		
-		agg.setSize(gPackets[volID].size());
-		agg.setName("my aggregation v0");
-
-		// build the blocks
-		auto blocks = agg.initBlocks(gPackets[volID].size());
-		for (int i =0; !gPackets[volID].empty(); i++) {
-			auto encoded = gPackets[volID].front();
-			gPackets[volID].pop();
-
-			auto blockReader = this->decodeBlock(encoded, buf_size);
-			auto blockBuilder = blocks[i];
-			this->encodeBlock(blockReader, &blockBuilder);
-			free(encoded);
-		}
-
-		// encode it again
-		int outbufSize = (agg.getSize() * buf_size) + 100;
-		kj::byte outbuf[outbufSize];
-		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
-		writeMessage(aos, msg);
-		
-		kj::ArrayPtr<kj::byte> bs = aos.getArray();
-		std::cout << "encoded msg len = " << bs.size() << ". outbuf size = " << outbufSize << "\n";
-
-		// erasure coded it and send the pieces to separate ardb server
-		int k = K;
-		int m = M;
-		Erasurer er(k, m);
-		int chunksize = er.chunksize(bs.size());
-		
-		unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * k);
-		for (int i=0; i < k; i++) {
-			int to_copy = i == k -1 ? bs.size() - (chunksize * (k-1)) : chunksize;
-			// TODO we might be able to avoid malloc and memcpy here
-			// except for the last piece
-			inputs[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
-			memcpy(inputs[i], bs.begin() + (chunksize * i), to_copy);
-		}
-
-		// allocate coding result
-		unsigned char **coding = (unsigned char **) malloc(sizeof(unsigned char *) * m);
-		for (int i=0; i < m; i++) {
-			coding[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
-		}
-
-		er.encode(inputs, coding, chunksize);
-
-		int hash_len = 32;
-		uint8_t *hash = hash_gen(bs.begin(), bs.size(), hash_len);
-		storeEncodedAgg(hash, hash_len, inputs, coding, k, m, chunksize);
-		free(hash);
-	}
-
-	/**
-	 * store erasure encoded data to redis-compatible server
-	 */
-	void storeEncodedAgg(uint8_t *hash, int hash_len, 
-			unsigned char **data, unsigned char **coding, int k, int m, int chunksize) {
-		// TODO make it async
-		// store the data
-		for (int i=0; i < k; i++) {
-			store(_objstor_addr, _objstor_port + i + 1, hash, hash_len, data[i], chunksize);
-		}
-		// store the coded data
-		for (int i=0; i < m; i++) {
-			store(_objstor_addr, _objstor_port + k + i + 1, hash, hash_len, coding[i], chunksize);
-		}
-		std::string last = "last_encoded";
-		store(_objstor_addr, _objstor_port, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
-	}
-
-
-	/**
-	 * store data to redis compatible server
-	 */
-	void store(std::string redis_addr, int redis_port, uint8_t *key, int key_len, unsigned char *data, int data_len) {
-		redisContext *c;
-		redisReply *reply;
-
-		// TODO : make persistent connection to redis
-		c = redisConnect(redis_addr.c_str(), redis_port);
-		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
-
-		// TODO : check reply and raise exception in case of error
-		std::cout << "store " << data_len << " bytes to redis " << redis_port <<" \n";
-		std::cout << "redis reply :" << reply->str << "\n";
-
-		freeReplyObject(reply);
-		redisFree(c);
-	}
-
-	uint8_t* hash_gen(uint8_t *data, uint8_t data_len, int hash_len) {
-		uint8_t *hash = (uint8_t *) malloc(sizeof(uint8_t) * hash_len);
-		if (blake2bp(hash, data, _priv_key.c_str(), hash_len, data_len, _priv_key.length()) != 0) {
-			std::cerr << "failed to hash\n";
-			exit(1); // TODO : better error handling
-		}
-		return hash;
-	}
-
-	TlogBlock::Reader decodeBlock(uint8_t *encoded, int len) {
-		auto apt = kj::ArrayPtr<kj::byte>(encoded, len);
-		kj::ArrayInputStream ais(apt);
-		::capnp::MallocMessageBuilder message;
-		readMessageCopy(ais, message);
-		return message.getRoot<TlogBlock>();
-	}
-
-	void encodeBlock(TlogBlock::Reader reader, TlogBlock::Builder* builder) {
-		builder->setVolumeId(reader.getVolumeId());
-		builder->setSequence(reader.getSequence());
-		builder->setSize(reader.getSize());
-		builder->setCrc32(reader.getCrc32());
-		builder->setData(reader.getData());
-	}
 };
 
 
