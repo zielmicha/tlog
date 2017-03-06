@@ -41,9 +41,16 @@ static std::map<uint32_t, std::queue<uint8_t *>> gPackets;
 static std::map<uint32_t, semaphore*> gSem;
 
 const int buf_size = 4152; /* size of the message we receive from client */
+
+/* number of tlog before we flush it to storage */
 const int FLUSH_SIZE = 10;
+
+/* erasure encoding variable */
 const int K = 4;
 const int M = 2;
+
+/* number of extra bytes for capnp aggregation encoding */
+const capnp_outbuf_extra = 200;
 
 struct system_stats {
     uint32_t _curr_connections {};
@@ -143,11 +150,12 @@ public:
 			auto blockReader = this->decodeBlock(packet, buf_size);
 			auto blockBuilder = blocks[i];
 			this->encodeBlock(blockReader, &blockBuilder);
+			std::cout << " block seq= " << blockBuilder.getSequence() << "\n";
 			free(packet);
 		}
 
 		// encode it
-		int outbufSize = (agg.getSize() * buf_size) + 100;
+		int outbufSize = (agg.getSize() * buf_size) + capnp_outbuf_extra;
 		kj::byte outbuf[outbufSize];
 		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 		writeMessage(aos, msg);
@@ -162,7 +170,7 @@ public:
 		unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * k);
 		for (int i=0; i < k; i++) {
 			int to_copy = i == k -1 ? bs.size() - (chunksize * (k-1)) : chunksize;
-			if (i != k -1) {
+			if (i == 100) {
 				// we can simply use pointer
 				inputs[i] =  bs.begin() + (chunksize * i);
 			} else {
@@ -226,7 +234,6 @@ public:
 		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
 
 		// TODO : check reply and raise exception in case of error
-		std::cout << "store " << data_len << " bytes to redis " << redis_port <<" \n";
 
 		freeReplyObject(reply);
 		redisFree(c);
