@@ -41,7 +41,7 @@ static std::map<uint32_t, std::queue<uint8_t *>> gPackets;
 /* map of semaphore, one per volume ID */
 static std::map<uint32_t, semaphore*> gSem;
 
-const int buf_size = 4152; /* size of the message we receive from client */
+const int BUF_SIZE = 16464; /* size of the message we receive from client */
 
 /* number of tlog before we flush it to storage */
 const int FLUSH_SIZE = 10;
@@ -152,7 +152,7 @@ public:
 		auto agg = msg.initRoot<TlogAggregation>();
 		
 		agg.setSize(gPackets[volID].size());
-		agg.setName("my aggregation v2");
+		agg.setName("my aggregation v3");
 		agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
 
 		// build the aggregation blocks
@@ -161,15 +161,14 @@ public:
 			auto packet = gPackets[volID].front();
 			gPackets[volID].pop();
 
-			auto blockReader = this->decodeBlock(packet, buf_size);
 			auto blockBuilder = blocks[i];
-			this->encodeBlock(blockReader, &blockBuilder);
+			encodeBlock(packet, BUF_SIZE, &blockBuilder);
 			std::cout << " block seq= " << blockBuilder.getSequence() << "\n";
 			free(packet);
 		}
 
 		// encode it
-		int outbufSize = (agg.getSize() * buf_size) + capnp_outbuf_extra;
+		int outbufSize = (agg.getSize() * BUF_SIZE) + capnp_outbuf_extra;
 		kj::byte outbuf[outbufSize];
 		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 		writeMessage(aos, msg);
@@ -304,15 +303,13 @@ private:
 		redisFree(c);
 	}
 
-	TlogBlock::Reader decodeBlock(uint8_t *encoded, int len) {
+	void encodeBlock(uint8_t *encoded, int len, TlogBlock::Builder* builder) {
 		auto apt = kj::ArrayPtr<kj::byte>(encoded, len);
 		kj::ArrayInputStream ais(apt);
 		::capnp::MallocMessageBuilder message;
 		readMessageCopy(ais, message);
-		return message.getRoot<TlogBlock>();
-	}
+		auto reader = message.getRoot<TlogBlock>();
 
-	void encodeBlock(TlogBlock::Reader reader, TlogBlock::Builder* builder) {
 		builder->setVolumeId(reader.getVolumeId());
 		builder->setSequence(reader.getSequence());
 		builder->setSize(reader.getSize());
@@ -386,7 +383,7 @@ public:
 	 */
 	future<> handle(input_stream<char>& in, output_stream<char>& out) {
     	return repeat([this, &out, &in] {
-        	return in.read_exactly(buf_size).then( [this, &out] (temporary_buffer<char> buf) {
+        	return in.read_exactly(BUF_SIZE).then( [this, &out] (temporary_buffer<char> buf) {
             	if (buf) {
 					uint8_t *packet = (uint8_t *) malloc(buf.size());
 					memcpy(packet, buf.get(), buf.size());
@@ -401,12 +398,12 @@ public:
     	});
 
 	}
+	// add packet to flusher cache
 	void addPacket(uint8_t *packet) {
 		// get volume ID
 		uint32_t volID;
-		memcpy(&volID, packet + 16, 4);
-		//volID = ntohl(volID);
-		
+		memcpy(&volID, packet + 24, 4);
+
 		// initialize  semaphore if needed
 		if (gSem.find(volID) == gSem.end()) {
 			semaphore *sem = new semaphore(1);
