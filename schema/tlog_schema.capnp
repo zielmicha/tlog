@@ -16,5 +16,5 @@ struct TlogAggregation {
 	timestamp @2 :UInt64;
 	volumeId @3 :UInt32;
 	blocks @4 :List(TlogBlock);
-	prev @5 :Text; # hash of the previous aggregation
+	prev @5 :Data; # hash of the previous aggregation
 }
