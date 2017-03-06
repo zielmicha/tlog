@@ -46,6 +46,9 @@ const int buf_size = 4152; /* size of the message we receive from client */
 /* number of tlog before we flush it to storage */
 const int FLUSH_SIZE = 10;
 
+/* len of blake2b hash we want to generate */
+const int HASH_LEN = 32;
+
 /* erasure encoding variable */
 const int K = 4;
 const int M = 2;
@@ -138,12 +141,19 @@ public:
 		if (!ok_to_flush(volID)) {
 			return;
 		}
+		uint8_t last_hash[HASH_LEN];
+		int last_hash_len;
+
+		get_last_hash(volID, last_hash, &last_hash_len);
+
+
 		// create aggregation object
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogAggregation>();
 		
 		agg.setSize(gPackets[volID].size());
-		agg.setName("my aggregation v1");
+		agg.setName("my aggregation v2");
+		agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
 
 		// build the aggregation blocks
 		auto blocks = agg.initBlocks(gPackets[volID].size());
@@ -194,7 +204,8 @@ public:
 		er.encode(inputs, coding, chunksize);
 
 		int hash_len = 32;
-		uint8_t *hash = hash_gen(volID, bs.begin(), bs.size(), hash_len);
+		uint8_t *hash = hash_gen(volID, bs.begin(), bs.size(),
+				last_hash, last_hash_len);
 		storeEncodedAgg(volID, hash, hash_len, inputs, coding, k, m, chunksize);
 		free(hash);
 		
@@ -253,14 +264,11 @@ private:
 		redisFree(c);
 	}
 
-	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len, int hash_len) {
-		uint8_t *hash = (uint8_t *) malloc(sizeof(uint8_t) * hash_len);
-		uint8_t key[50];
-		int key_len;
-
-		get_hash_key(vol_id, key, &key_len);
-
-		if (blake2bp(hash, data, key, hash_len, data_len, key_len) != 0) {
+	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len, 
+			uint8_t *key, int key_len) {
+		uint8_t *hash = (uint8_t *) malloc(sizeof(uint8_t) * HASH_LEN);
+		
+		if (blake2bp(hash, data, key, HASH_LEN, data_len, key_len) != 0) {
 			std::cerr << "failed to hash\n";
 			exit(1); // TODO : better error handling
 		}
@@ -272,7 +280,7 @@ private:
 	 * use last hash or priv_key if we dont have last hash.
 	 * TODO : cache it in memory
 	 */ 
-	void get_hash_key(uint32_t volID, uint8_t *key, int *key_len) {
+	void get_last_hash(uint32_t volID, uint8_t *key, int *key_len) {
 		redisContext *c;
 		redisReply *reply;
 

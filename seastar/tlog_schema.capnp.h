@@ -194,7 +194,7 @@ public:
   inline  ::capnp::List< ::TlogBlock>::Reader getBlocks() const;
 
   inline bool hasPrev() const;
-  inline  ::capnp::Text::Reader getPrev() const;
+  inline  ::capnp::Data::Reader getPrev() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -248,11 +248,11 @@ public:
   inline ::capnp::Orphan< ::capnp::List< ::TlogBlock>> disownBlocks();
 
   inline bool hasPrev();
-  inline  ::capnp::Text::Builder getPrev();
-  inline void setPrev( ::capnp::Text::Reader value);
-  inline  ::capnp::Text::Builder initPrev(unsigned int size);
-  inline void adoptPrev(::capnp::Orphan< ::capnp::Text>&& value);
-  inline ::capnp::Orphan< ::capnp::Text> disownPrev();
+  inline  ::capnp::Data::Builder getPrev();
+  inline void setPrev( ::capnp::Data::Reader value);
+  inline  ::capnp::Data::Builder initPrev(unsigned int size);
+  inline void adoptPrev(::capnp::Orphan< ::capnp::Data>&& value);
+  inline ::capnp::Orphan< ::capnp::Data> disownPrev();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -510,29 +510,29 @@ inline bool TlogAggregation::Reader::hasPrev() const {
 inline bool TlogAggregation::Builder::hasPrev() {
   return !_builder.getPointerField(2 * ::capnp::POINTERS).isNull();
 }
-inline  ::capnp::Text::Reader TlogAggregation::Reader::getPrev() const {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(
+inline  ::capnp::Data::Reader TlogAggregation::Reader::getPrev() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::get(
       _reader.getPointerField(2 * ::capnp::POINTERS));
 }
-inline  ::capnp::Text::Builder TlogAggregation::Builder::getPrev() {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::get(
+inline  ::capnp::Data::Builder TlogAggregation::Builder::getPrev() {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::get(
       _builder.getPointerField(2 * ::capnp::POINTERS));
 }
-inline void TlogAggregation::Builder::setPrev( ::capnp::Text::Reader value) {
-  ::capnp::_::PointerHelpers< ::capnp::Text>::set(
+inline void TlogAggregation::Builder::setPrev( ::capnp::Data::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Data>::set(
       _builder.getPointerField(2 * ::capnp::POINTERS), value);
 }
-inline  ::capnp::Text::Builder TlogAggregation::Builder::initPrev(unsigned int size) {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::init(
+inline  ::capnp::Data::Builder TlogAggregation::Builder::initPrev(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::init(
       _builder.getPointerField(2 * ::capnp::POINTERS), size);
 }
 inline void TlogAggregation::Builder::adoptPrev(
-    ::capnp::Orphan< ::capnp::Text>&& value) {
-  ::capnp::_::PointerHelpers< ::capnp::Text>::adopt(
+    ::capnp::Orphan< ::capnp::Data>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Data>::adopt(
       _builder.getPointerField(2 * ::capnp::POINTERS), kj::mv(value));
 }
-inline ::capnp::Orphan< ::capnp::Text> TlogAggregation::Builder::disownPrev() {
-  return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(
+inline ::capnp::Orphan< ::capnp::Data> TlogAggregation::Builder::disownPrev() {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::disown(
       _builder.getPointerField(2 * ::capnp::POINTERS));
 }
 
