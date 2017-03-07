@@ -2,7 +2,7 @@
 
 struct TlogBlock {
 	volumeId @0 :UInt32;
-	sequence @1 :UInt32;
+	sequence @1 :UInt64;
 	lba @2 :UInt64;
 	size @3 :UInt32;
 	crc32  @4 :UInt32;
