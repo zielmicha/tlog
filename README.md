@@ -11,6 +11,7 @@ Transaction log server
 ```
 Block:
   - volume ID: uint32
+  - sequence : uint64
   - LBA :uint64
   - Size :uint64
   - crc32 :uint32
