@@ -133,14 +133,33 @@ private:
 	std::string _objstor_addr;
 	int _objstor_port;
 	std::string _priv_key;
+	std::vector<redisContext *> _redis_conns;
 public:
 	Flusher() {
 	}
-	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key)
+	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, int k, int m)
 	: _objstor_addr(objstor_addr)
 	, _objstor_port(objstor_port)
 	, _priv_key(priv_key)
-	{}
+	{
+		// create conenctions to metadata server
+		redisContext *c = redisConnect(objstor_addr.c_str(), objstor_port);
+		if (c == NULL || c->err) {
+			std::cerr << "failed to connect to storage server " << objstor_addr << ":" << objstor_port << "\n";
+			exit(-1);
+		}
+		_redis_conns.push_back(c);
+
+		// create connections to each server
+		for (int i=0; i < k+m; i++) {
+			redisContext *c = redisConnect(objstor_addr.c_str(), objstor_port+i+1);
+			if (c == NULL || c->err) {
+				std::cerr << "failed to connect to storage server " << objstor_addr << ":" << objstor_port+i+1 << "\n";
+				exit(-1);
+			}
+			_redis_conns.push_back(c);
+		}
+	}
 
 	/**
 	 * pick packets to be flushed.
@@ -270,31 +289,28 @@ private:
 		// TODO make it async
 		// store the data
 		for (int i=0; i < k; i++) {
-			store(_objstor_addr, _objstor_port + i + 1, hash, hash_len, data[i], chunksize);
+			store(i + 1, hash, hash_len, data[i], chunksize);
 		}
 		// store the coded data
 		for (int i=0; i < m; i++) {
-			store(_objstor_addr, _objstor_port + k + i + 1, hash, hash_len, coding[i], chunksize);
+			store(k + i + 1, hash, hash_len, coding[i], chunksize);
 		}
 		std::string last = "last_hash_" + std::to_string(vol_id);
-		store(_objstor_addr, _objstor_port, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
+		store(0, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
 	}
 
 
 	/**
 	 * store data to redis compatible server
 	 */
-	void store(std::string redis_addr, int redis_port, uint8_t *key, int key_len, unsigned char *data, int data_len) {
-		redisContext *c;
+	void store(int redis_id, uint8_t *key, int key_len, unsigned char *data, int data_len) {
+		redisContext *c = _redis_conns[redis_id];
 		redisReply *reply;
 
-		// TODO : make persistent connection to redis
-		c = redisConnect(redis_addr.c_str(), redis_port);
 		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
 
 		// TODO : check reply and raise exception in case of error
 		freeReplyObject(reply);
-		redisFree(c);
 	}
 
 	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len, 
@@ -314,10 +330,9 @@ private:
 	 * TODO : cache it in memory
 	 */ 
 	void get_last_hash(uint32_t volID, uint8_t *key, int *key_len) {
-		redisContext *c;
 		redisReply *reply;
+		redisContext *c = _redis_conns[0];
 
-		c = redisConnect(_objstor_addr.c_str(), _objstor_port);
 		reply = (redisReply *)redisCommand(c, "GET last_hash_%u", volID);
 
 		// if there is no last hash, use priv key
@@ -391,7 +406,7 @@ public:
 		, _priv_key(priv_key)
         , _port(port)
     {
-		_flusher = Flusher(_objstor_addr, _objstor_port, _priv_key);
+		_flusher = Flusher(_objstor_addr, _objstor_port, _priv_key, K, M);
 		std::cout << "start tlog with objstor_addr = " << _objstor_addr << ". objstor port = " << _objstor_port << "\n";
 	}
 
