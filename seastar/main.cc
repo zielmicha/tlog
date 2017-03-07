@@ -40,11 +40,12 @@ static std::map<uint32_t, std::map<uint32_t, uint8_t *>> gPackets;
 
 /* map of semaphore, one per volume ID */
 static std::map<uint32_t, semaphore*> gSem;
+static semaphore  gSemFlush{1}; // flush lock
 
 const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
 /* number of tlog before we flush it to storage */
-const int FLUSH_SIZE = 10;
+const int FLUSH_SIZE = 100;
 
 /* len of blake2b hash we want to generate */
 const int HASH_LEN = 32;
@@ -139,11 +140,26 @@ public:
 	, _priv_key(priv_key)
 	{}
 
-	/* flush the packets to it's storage */
-	void flush(uint32_t volID, int k, int m) {
-		if (!ok_to_flush(volID)) {
-			return;
+	/**
+	 * pick packets to be flushed.
+	 * It must be called under flush & sem lock
+	 */
+	bool pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q) {
+		if (!ok_to_flush(vol_id)) {
+			return false;
 		}
+
+		int i = 0;
+		auto it = gPackets[vol_id].begin();
+		while (i < FLUSH_SIZE && it != gPackets[vol_id].end()) {
+			q->push(it->second);
+			it = gPackets[vol_id].erase(it);
+			i++;
+		}
+		return true;
+	}
+	/* flush the packets to it's storage */
+	void flush(uint32_t volID, int k, int m, std::queue<uint8_t *> pq) {
 		std::cout << "flushing...\n";
 		uint8_t last_hash[HASH_LEN];
 		int last_hash_len;
@@ -155,22 +171,20 @@ public:
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogAggregation>();
 		
-		agg.setSize(FLUSH_SIZE);
+		agg.setSize(pq.size());
 		agg.setName("my aggregation v4");
 		agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
 
 		// build the aggregation blocks
-		auto blocks = agg.initBlocks(FLUSH_SIZE);
+		// check if we can use packet's memory, to avoid memcpy
+		auto blocks = agg.initBlocks(pq.size());
 
-		int i = 0;
-		auto it = gPackets[volID].begin();
-		while (i < FLUSH_SIZE && it != gPackets[volID].end()) {
+		for (int i=0; !pq.empty(); i++) {
 			auto block = blocks[i];
-			encodeBlock(it->second, BUF_SIZE, &block);
-
-			free(it->second);
-			it = gPackets[volID].erase(it);
-			i++;
+			auto packet = pq.front();
+			pq.pop();
+			encodeBlock(packet, BUF_SIZE, &block);
+			free(packet);
 		}
 
 
@@ -305,7 +319,7 @@ private:
 		reply = (redisReply *)redisCommand(c, "GET last_hash_%u", volID);
 
 		// if there is no last hash, use priv key
-		if (reply->type == REDIS_REPLY_NIL) {
+		if (reply == NULL || reply->type == REDIS_REPLY_NIL) {
 			std::cout << "there is no last hash for vol " << volID << ". use priv key\n";
 			memcpy(key, _priv_key.c_str(), _priv_key.length());
 			*key_len = _priv_key.length();
@@ -426,19 +440,32 @@ public:
 
 		// initialize  semaphore if needed
 		if (gSem.find(volID) == gSem.end()) {
-			semaphore *sem = new semaphore(1);
-			gSem.emplace(volID, sem);
+			gSem.emplace(volID, new semaphore(1));
 		}
+		
+		bool need_flush = false;
+		std::queue<uint8_t *> flush_q;
+		Flusher f(_objstor_addr, _objstor_port, _priv_key);
 		
 		// push the packets and flush if needed
 		// TODO : do better locking
-		gSem.at(volID)->wait();
+		gSem[volID]->wait();
+
 		gPackets[volID].insert({seq, packet});
 		if (gPackets[volID].size() >= FLUSH_SIZE) {
-			Flusher f(_objstor_addr, _objstor_port, _priv_key);
-			f.flush(volID, K, M);
+			if (gSemFlush.try_wait()) {
+				need_flush = f.pick_to_flush(volID, &flush_q);
+				if (!need_flush) {
+					gSemFlush.signal();
+				}
+			}
 		}
-		gSem.at(volID)->signal();
+		gSem[volID]->signal();
+		
+		if (need_flush) {
+			f.flush(volID, K, M, flush_q);
+			gSemFlush.signal();
+		}
 	}
 
 private:
