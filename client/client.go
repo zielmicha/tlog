@@ -27,7 +27,9 @@ func New(addr string) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Send(volID, seq, crc32 uint32, lba, timestamp uint64, data []byte) error {
+func (c *Client) Send(volID uint32, seq uint64, crc32 uint32,
+	lba, timestamp uint64, data []byte) error {
+
 	if len(data) != 1024*16 {
 		return ErrInvalidDataLen
 	}
@@ -36,11 +38,12 @@ func (c *Client) Send(volID, seq, crc32 uint32, lba, timestamp uint64, data []by
 	if err != nil {
 		return err
 	}
+	fmt.Printf("seq = %v size = %v\n", seq, len(b))
 	_, err = c.conn.Write(b)
 	return err
 }
 
-func buildCapnp(volID, seq, crc uint32, lba, timestamp uint64, data []byte) ([]byte, error) {
+func buildCapnp(volID uint32, seq uint64, crc uint32, lba, timestamp uint64, data []byte) ([]byte, error) {
 	msg, seg, err := capnp.NewMessage(capnp.MultiSegment(nil))
 	if err != nil {
 		return nil, fmt.Errorf("build capnp:%v", err)
