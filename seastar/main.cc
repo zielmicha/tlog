@@ -29,7 +29,7 @@
 #define VERSION_STRING PLATFORM " " VERSION
 
 future<> slow() {
-    return sleep(std::chrono::seconds(10));
+    return sleep(std::chrono::seconds(10000000));
 }
 namespace tlog {
 
@@ -45,7 +45,7 @@ static semaphore  gSemFlush{1}; // flush lock
 const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
 /* number of tlog before we flush it to storage */
-const int FLUSH_SIZE = 100;
+const int FLUSH_SIZE = 25;
 
 /* len of blake2b hash we want to generate */
 const int HASH_LEN = 32;
@@ -134,6 +134,8 @@ private:
 	int _objstor_port;
 	std::string _priv_key;
 public:
+	Flusher() {
+	}
 	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key)
 	: _objstor_addr(objstor_addr)
 	, _objstor_port(objstor_port)
@@ -172,7 +174,7 @@ public:
 		auto agg = msg.initRoot<TlogAggregation>();
 		
 		agg.setSize(pq.size());
-		agg.setName("my aggregation v4");
+		agg.setName("my aggregation v6");
 		agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
 
 		// build the aggregation blocks
@@ -357,6 +359,8 @@ private:
 	std::string _objstor_addr;
 	int _objstor_port;
 	std::string _priv_key;
+	Flusher _flusher;
+
     uint16_t _port;
     struct connection {
         connected_socket _socket;
@@ -387,6 +391,7 @@ public:
 		, _priv_key(priv_key)
         , _port(port)
     {
+		_flusher = Flusher(_objstor_addr, _objstor_port, _priv_key);
 		std::cout << "start tlog with objstor_addr = " << _objstor_addr << ". objstor port = " << _objstor_port << "\n";
 	}
 
@@ -442,28 +447,30 @@ public:
 		if (gSem.find(volID) == gSem.end()) {
 			gSem.emplace(volID, new semaphore(1));
 		}
-		
+
+		// push the packets and flush if needed
 		bool need_flush = false;
 		std::queue<uint8_t *> flush_q;
-		Flusher f(_objstor_addr, _objstor_port, _priv_key);
 		
-		// push the packets and flush if needed
-		// TODO : do better locking
 		gSem[volID]->wait();
 
 		gPackets[volID].insert({seq, packet});
+
 		if (gPackets[volID].size() >= FLUSH_SIZE) {
 			if (gSemFlush.try_wait()) {
-				need_flush = f.pick_to_flush(volID, &flush_q);
+				need_flush = _flusher.pick_to_flush(volID, &flush_q);
 				if (!need_flush) {
 					gSemFlush.signal();
 				}
 			}
 		}
+
 		gSem[volID]->signal();
-		
+
+		// we need to flush outside the gSem lock
+		// to allow other core to insert the packet
 		if (need_flush) {
-			f.flush(volID, K, M, flush_q);
+			_flusher.flush(volID, K, M, flush_q);
 			gSemFlush.signal();
 		}
 	}
@@ -487,7 +494,7 @@ int main(int ac, char** av) {
 		
 		// TODO : make thse configs configurable
         uint16_t port = 11211;
-		std::string objstor_addr = "192.168.1.4";
+		std::string objstor_addr = "127.0.0.1";
 		int objstor_port = 16379;
 		std::string priv_key = "my-secret-key";
 
