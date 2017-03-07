@@ -53,8 +53,11 @@ const int HASH_LEN = 32;
 const int K = 4;
 const int M = 2;
 
-/* number of extra bytes for capnp aggregation encoding */
-const int capnp_outbuf_extra = 200;
+/* number of extra bytes for capnp aggregation encoding 
+ * TODO : find the correct number. It currently based only
+ * on my own guest.
+ * */
+const int CAPNP_OUTBUF_EXTRA = 300;
 
 struct system_stats {
     uint32_t _curr_connections {};
@@ -160,7 +163,7 @@ public:
 
 		auto packetsMap = gPackets[volID];
 		int i = 0;
-		for (auto it : packetsMap) {
+		/*for (auto it : packetsMap) {
 			if (i++ >= FLUSH_SIZE) {
 				break;
 			}
@@ -169,11 +172,20 @@ public:
 			gPackets[volID].erase(it.first);
 			std::cerr << " seq # " << it.first << ".seq block= " << block.getSequence() << "\n";
 			free(it.second);
+		}*/
+		auto it = gPackets[volID].begin();
+		while (it != gPackets[volID].end()) {
+			auto block = blocks[i];
+			encodeBlock(it->second, BUF_SIZE, &block);
+
+			free(it->second);
+			it = gPackets[volID].erase(it);
+			i++;
 		}
 
 
 		// encode it
-		int outbufSize = (agg.getSize() * BUF_SIZE) + capnp_outbuf_extra;
+		int outbufSize = (agg.getSize() * BUF_SIZE) + CAPNP_OUTBUF_EXTRA;
 		kj::byte outbuf[outbufSize];
 		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 		writeMessage(aos, msg);
@@ -188,7 +200,7 @@ public:
 		unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * k);
 		for (int i=0; i < k; i++) {
 			int to_copy = i == k -1 ? bs.size() - (chunksize * (k-1)) : chunksize;
-			if (i == 100) {
+			if (i < k-1) {
 				// we can simply use pointer
 				inputs[i] =  bs.begin() + (chunksize * i);
 			} else {
@@ -260,7 +272,6 @@ private:
 		}
 		std::string last = "last_hash_" + std::to_string(vol_id);
 		store(_objstor_addr, _objstor_port, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
-		std::cout << "last hash = " << last << "\n";
 	}
 
 
@@ -404,7 +415,7 @@ public:
             	if (buf) {
 					uint8_t *packet = (uint8_t *) malloc(buf.size());
 					memcpy(packet, buf.get(), buf.size());
-					this->addPacket(packet);
+					addPacket(packet);
                 	return make_ready_future<stop_iteration>(stop_iteration::no);
             	} else {
                 	return make_ready_future<stop_iteration>(stop_iteration::yes);
