@@ -41,7 +41,7 @@ static std::map<uint32_t, std::map<uint32_t, uint8_t *>> gPackets;
 /* map of semaphore, one per volume ID */
 static std::map<uint32_t, semaphore*> gSem;
 
-const int BUF_SIZE = 16464; /* size of the message we receive from client */
+const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
 /* number of tlog before we flush it to storage */
 const int FLUSH_SIZE = 10;
@@ -144,6 +144,7 @@ public:
 		if (!ok_to_flush(volID)) {
 			return;
 		}
+		std::cout << "flushing...\n";
 		uint8_t last_hash[HASH_LEN];
 		int last_hash_len;
 
@@ -154,27 +155,16 @@ public:
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogAggregation>();
 		
-		agg.setSize(gPackets[volID].size());
-		agg.setName("my aggregation v3");
+		agg.setSize(FLUSH_SIZE);
+		agg.setName("my aggregation v4");
 		agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
 
 		// build the aggregation blocks
-		auto blocks = agg.initBlocks(gPackets[volID].size());
+		auto blocks = agg.initBlocks(FLUSH_SIZE);
 
-		auto packetsMap = gPackets[volID];
 		int i = 0;
-		/*for (auto it : packetsMap) {
-			if (i++ >= FLUSH_SIZE) {
-				break;
-			}
-			auto block = blocks[i];
-			encodeBlock(it.second, BUF_SIZE, &block);
-			gPackets[volID].erase(it.first);
-			std::cerr << " seq # " << it.first << ".seq block= " << block.getSequence() << "\n";
-			free(it.second);
-		}*/
 		auto it = gPackets[volID].begin();
-		while (it != gPackets[volID].end()) {
+		while (i < FLUSH_SIZE && it != gPackets[volID].end()) {
 			auto block = blocks[i];
 			encodeBlock(it->second, BUF_SIZE, &block);
 
@@ -430,9 +420,9 @@ public:
 	void addPacket(uint8_t *packet) {
 		// get volume ID
 		uint32_t volID;
-		uint32_t seq;
+		uint64_t seq;
 		memcpy(&volID, packet + 24, 4);
-		memcpy(&seq, packet + 28, 4);
+		memcpy(&seq, packet + 32, 8);
 
 		// initialize  semaphore if needed
 		if (gSem.find(volID) == gSem.end()) {

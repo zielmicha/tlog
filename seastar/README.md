@@ -37,3 +37,4 @@ export SEASTAR=YOUR_SEASTAR_DIR
 - add compression
 - add encryption
 - add proper logging
+- fix segmentation fault issue (run it with `./main -c 1`, it stil has bug, but less)
