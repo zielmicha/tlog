@@ -436,7 +436,10 @@ public:
 	future<> handle(input_stream<char>& in, output_stream<char>& out) {
     	return repeat([this, &out, &in] {
         	return in.read_exactly(BUF_SIZE).then( [this, &out] (temporary_buffer<char> buf) {
-            	if (buf) {
+				// Check if we receive data with expected size.
+				// Unexpected size indicated broken client/connection,
+				// we close it for simplicity.
+            	if (buf && buf.size() == BUF_SIZE) {
 					uint8_t *packet = (uint8_t *) malloc(buf.size());
 					memcpy(packet, buf.get(), buf.size());
 					addPacket(packet);
