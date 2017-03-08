@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"zombiezen.com/go/capnproto2"
 )
 
 var (
 	ErrInvalidDataLen = errors.New("data length must be 16384 bytes")
+	ErrClosed         = errors.New("connection closed")
 )
 
 // Client defines a Tlog Client.
@@ -85,15 +87,22 @@ func (c *Client) Send(volID uint32, seq uint64, crc32 uint32,
 }
 
 func (c *Client) sendAll(b []byte) (int, error) {
+	c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	nWrite := 0
 	for nWrite < len(b) {
 		n, err := c.bw.Write(b[nWrite:])
 		if err != nil && !isNetTempErr(err) {
 			return nWrite, err
 		}
+		if n == 0 {
+			return nWrite, ErrClosed
+		}
+		if err := c.bw.Flush(); !isNetTempErr(err) {
+			return nWrite, err
+		}
 		nWrite += n
 	}
-	return nWrite, c.bw.Flush()
+	return nWrite, nil
 }
 
 func isNetTempErr(err error) bool {
