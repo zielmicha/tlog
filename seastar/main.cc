@@ -60,7 +60,7 @@ const int HASH_LEN = 32;
 const int K = 4;
 const int M = 2;
 
-/* number of extra bytes for capnp aggregation encoding 
+/* number of extra bytes for capnp aggregation encoding
  * TODO : find the correct number. It currently based only
  * on my own guest.
  * */
@@ -89,7 +89,7 @@ public:
         _start_time = std::min(_start_time, other._start_time);
     }
     future<> stop() { return make_ready_future<>(); }
-	
+
 
 };
 
@@ -121,7 +121,7 @@ public:
 		ec_encode_data(chunksize, _k, _m, _encode_tab, data, coding);
 	}
 
-	/** 
+	/**
 	 * Count chunk size given the data_len.
 	 * TODO : check again if we do it in the right way.
 	 */
@@ -153,18 +153,18 @@ public:
 		// - metadata server (id = 0)
 		// - erasure encoded server (id = 1.. k+m)
 		// create connections to each server
-		for (int i=0; i <= k+m; i++) {
+		for (int i=0; i < 1+k+m; i++) {
 			create_redis_conn(i);
 		}
 	}
 
 	redisContext *create_redis_conn(int id) {
 		std::cout << "creating redis conn for id=" << id << "\n";
-		
+
 		auto port = _objstor_port + id;
-		
+
 		redisContext *c = redisConnect(_objstor_addr.c_str(), port);
-		
+
 		if (c == NULL || c->err || redisEnableKeepAlive(c) != REDIS_OK) {
 			std::cout << "connect:" << _objstor_addr << ":"<< port << "\n" << std::flush;
 			exit(-1); // TODO raise exception
@@ -182,19 +182,18 @@ public:
 		if (!ok_to_flush(vol_id)) {
 			return false;
 		}
-
-		int i = 0;
 		auto it = gPackets[vol_id].begin();
-		while (i < FLUSH_SIZE && it != gPackets[vol_id].end()) {
+		for (int i=0; i  < FLUSH_SIZE && it != gPackets[vol_id].end(); i++) {
 			q->push(it->second);
+			//free(it->second);
 			it = gPackets[vol_id].erase(it);
-			i++;
 		}
 		return true;
 	}
 
 	/* flush the packets to it's storage */
 	void flush(uint32_t volID, int k, int m, std::queue<uint8_t *> pq) {
+		//std::cout << ".\n";
 		uint8_t last_hash[HASH_LEN];
 		int last_hash_len;
 
@@ -204,7 +203,7 @@ public:
 		// create aggregation object
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogAggregation>();
-		
+
 		agg.setSize(pq.size());
 		agg.setName("my aggregation v6");
 		agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
@@ -227,13 +226,13 @@ public:
 		kj::byte outbuf[outbufSize];
 		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 		writeMessage(aos, msg);
-		
+
 		kj::ArrayPtr<kj::byte> bs = aos.getArray();
 
 		// erasure encoding
 		Erasurer er(k, m);
 		int chunksize = er.chunksize(bs.size());
-		
+
 		// build the inputs for erasure coding
 		unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * k);
 		for (int i=0; i < k; i++) {
@@ -258,12 +257,13 @@ public:
 		er.encode(inputs, coding, chunksize);
 
 		int hash_len = 32;
+		//uint8_t hash[bs.size()];
 		uint8_t *hash = hash_gen(volID, bs.begin(), bs.size(),
 				last_hash, last_hash_len);
 		storeEncodedAgg(volID, hash, hash_len, inputs, coding, k, m, chunksize);
-		//free(hash);
-		
-	
+		free(hash);
+
+
 		// cleanup erasure coding data
 		free(inputs[k-1]);
 		free(inputs);
@@ -271,10 +271,11 @@ public:
 			free(coding[i]);
 		}
 		free(coding);
+
 	}
 
 private:
-	/** 
+	/**
 	 * check if it is ok to flush to storage
 	 * 1. first tlog is one after last flush
 	 * 2. we have all sequences neded
@@ -298,7 +299,7 @@ private:
 	/**
 	 * store erasure encoded data to redis-compatible server
 	 */
-	void storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len, 
+	void storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len,
 			unsigned char **data, unsigned char **coding, int k, int m, int chunksize) {
 		// TODO make it async
 		// store the data
@@ -314,10 +315,15 @@ private:
 		std::string last = "last_hash_" + std::to_string(vol_id);
 		store(0, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
 		auto old_last = g_last_hash[vol_id];
+		uint8_t *new_hash = (uint8_t *) malloc(hash_len);
+
+		std::memcpy(new_hash, hash, hash_len);
+
 		if (old_last != NULL) {
 			free(old_last);
 		}
-		g_last_hash[vol_id] = hash;
+
+		g_last_hash[vol_id] = new_hash;
 	}
 
 
@@ -331,7 +337,7 @@ private:
 
 		// store it
 		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
-		
+
 		// if we get NULL reply, we restart the redis connection
 		// and tried it again
 		if (reply == NULL) {
@@ -346,10 +352,10 @@ private:
 		freeReplyObject(reply);
 	}
 
-	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len, 
+	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len,
 			uint8_t *key, int key_len) {
 		uint8_t *hash = (uint8_t *) malloc(sizeof(uint8_t) * HASH_LEN);
-		
+
 		if (blake2bp(hash, data, key, HASH_LEN, data_len, key_len) != 0) {
 			std::cerr << "failed to hash\n";
 			exit(1); // TODO : better error handling
@@ -360,9 +366,9 @@ private:
 	/**
 	 * get hash(1) key.
 	 * use last hash or priv_key if we dont have last hash.
-	 * TODO : 
+	 * TODO :
 	 * - avoid memcpy
-	 */ 
+	 */
 	void get_last_hash(uint32_t volID, uint8_t *hash, int *hash_len, bool retried = false) {
 		// get last hash from memory
 		auto last_hash = g_last_hash[volID];
@@ -372,6 +378,7 @@ private:
 			return;
 		}
 
+		std::cerr << "WARNING...still execute redis...\n";
 		// get last hash from DB
 		redisReply *reply;
 		redisContext *c = _redis_conns[0];
@@ -448,7 +455,7 @@ private:
         }
     };
 public:
-    tcp_server(distributed<system_stats>& system_stats, std::string objstor_addr, 
+    tcp_server(distributed<system_stats>& system_stats, std::string objstor_addr,
 			int objstor_port, std::string priv_key, uint16_t port = 11211)
         : _system_stats(system_stats)
 		, _objstor_addr(objstor_addr)
@@ -485,13 +492,14 @@ public:
 	 */
 	future<> handle(input_stream<char>& in, output_stream<char>& out) {
     	return repeat([this, &out, &in] {
-        	return in.read_exactly(BUF_SIZE).then( [this, &out] (temporary_buffer<char> buf) {
+			// this malloc will be freed in 'flush'
+			uint8_t *packet = (uint8_t *) malloc(BUF_SIZE);
+        	return in.read_exactly(BUF_SIZE).then( [this, &out, packet] (temporary_buffer<char> buf) {
 				// Check if we receive data with expected size.
 				// Unexpected size indicated broken client/connection,
 				// we close it for simplicity.
             	if (buf && buf.size() == BUF_SIZE) {
-					uint8_t *packet = (uint8_t *) malloc(buf.size());
-					memcpy(packet, buf.get(), buf.size());
+					std::memcpy(packet, buf.get(), buf.size());
 					addPacket(packet);
                 	return make_ready_future<stop_iteration>(stop_iteration::no);
             	} else {
@@ -519,12 +527,12 @@ public:
 		// push the packets and flush if needed
 		bool need_flush = false;
 		std::queue<uint8_t *> flush_q;
-		
-		gSem[volID]->wait();
+
+		auto sem = gSem[volID];
+		sem->wait();
 
 		gPackets[volID].insert({seq, packet});
 
-		//std::cout << "gPackets size = " << gPackets[volID].size() << "\n";
 		if (gPackets[volID].size() >= FLUSH_SIZE) {
 			if (gSemFlush.try_wait()) {
 				need_flush = _flusher.pick_to_flush(volID, &flush_q);
@@ -534,7 +542,7 @@ public:
 			}
 		}
 
-		gSem[volID]->signal();
+		sem->signal();
 
 		// we need to flush outside the gSem lock
 		// to allow other core to insert the packet
@@ -560,7 +568,7 @@ int main(int ac, char** av) {
         engine().at_exit([&] { return system_stats.stop(); });
 
         auto&& config = app.configuration();
-		
+
 		// TODO : make thse configs configurable
         uint16_t port = 11211;
 		std::string objstor_addr = "127.0.0.1";
@@ -571,7 +579,7 @@ int main(int ac, char** av) {
             std::cout << PLATFORM << " tlog " << VERSION << "\n";
             return make_ready_future<>();
         }).then([&, port, objstor_port, objstor_addr, priv_key] {
-            return tcp_server.start(std::ref(system_stats), objstor_addr, objstor_port, 
+            return tcp_server.start(std::ref(system_stats), objstor_addr, objstor_port,
 					priv_key, port);
         }).then([&tcp_server] {
             return tcp_server.invoke_on_all(&tlog::tcp_server::start);
