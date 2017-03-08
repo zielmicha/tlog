@@ -38,9 +38,15 @@ using clock_type = lowres_clock;
 /* map of packets queue, one per volume ID */
 static std::map<uint32_t, std::map<uint32_t, uint8_t *>> gPackets;
 
+/* save last hash to memory */
+static std::map<uint32_t, uint8_t *> g_last_hash;
+static semaphore  g_last_hash_sem{1};
+
 /* map of semaphore, one per volume ID */
 static std::map<uint32_t, semaphore*> gSem;
-static semaphore  gSemFlush{1}; // flush lock
+
+/* flush lock, we currently only allow one flusher at a time*/
+static semaphore  gSemFlush{1};
 
 const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
@@ -142,24 +148,31 @@ public:
 	, _objstor_port(objstor_port)
 	, _priv_key(priv_key)
 	{
-		// create conenctions to metadata server
-		redisContext *c = redisConnect(objstor_addr.c_str(), objstor_port);
-		if (c == NULL || c->err) {
-			std::cerr << "failed to connect to storage server " << objstor_addr << ":" << objstor_port << "\n";
-			exit(-1);
-		}
-		_redis_conns.push_back(c);
-
+		_redis_conns.resize(k+m+1);
+		// create conenctions to -
+		// - metadata server (id = 0)
+		// - erasure encoded server (id = 1.. k+m)
 		// create connections to each server
-		for (int i=0; i < k+m; i++) {
-			redisContext *c = redisConnect(objstor_addr.c_str(), objstor_port+i+1);
-			if (c == NULL || c->err) {
-				std::cerr << "failed to connect to storage server " << objstor_addr << ":" << objstor_port+i+1 << "\n";
-				exit(-1);
-			}
-			_redis_conns.push_back(c);
+		for (int i=0; i <= k+m; i++) {
+			create_redis_conn(i);
 		}
 	}
+
+	redisContext *create_redis_conn(int id) {
+		std::cout << "creating redis conn for id=" << id << "\n";
+		
+		auto port = _objstor_port + id;
+		
+		redisContext *c = redisConnect(_objstor_addr.c_str(), port);
+		
+		if (c == NULL || c->err || redisEnableKeepAlive(c) != REDIS_OK) {
+			std::cout << "connect:" << _objstor_addr << ":"<< port << "\n" << std::flush;
+			exit(-1); // TODO raise exception
+		}
+		_redis_conns[id] = c;
+		return c;
+	}
+
 
 	/**
 	 * pick packets to be flushed.
@@ -179,9 +192,9 @@ public:
 		}
 		return true;
 	}
+
 	/* flush the packets to it's storage */
 	void flush(uint32_t volID, int k, int m, std::queue<uint8_t *> pq) {
-		std::cout << "flushing...\n";
 		uint8_t last_hash[HASH_LEN];
 		int last_hash_len;
 
@@ -248,7 +261,7 @@ public:
 		uint8_t *hash = hash_gen(volID, bs.begin(), bs.size(),
 				last_hash, last_hash_len);
 		storeEncodedAgg(volID, hash, hash_len, inputs, coding, k, m, chunksize);
-		free(hash);
+		//free(hash);
 		
 	
 		// cleanup erasure coding data
@@ -268,6 +281,7 @@ private:
 	 * 3. we need to handle if sequence number reset to 0
 	 */
 	bool ok_to_flush(uint32_t volID) {
+		return true;
 		auto packetsMap = gPackets[volID];
 		auto it = packetsMap.cbegin();
 		auto prev = it->first;
@@ -295,19 +309,38 @@ private:
 		for (int i=0; i < m; i++) {
 			store(k + i + 1, hash, hash_len, coding[i], chunksize);
 		}
+
+		// store the hash in both memory and redis
 		std::string last = "last_hash_" + std::to_string(vol_id);
 		store(0, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
+		auto old_last = g_last_hash[vol_id];
+		if (old_last != NULL) {
+			free(old_last);
+		}
+		g_last_hash[vol_id] = hash;
 	}
 
 
 	/**
 	 * store data to redis compatible server
 	 */
-	void store(int redis_id, uint8_t *key, int key_len, unsigned char *data, int data_len) {
+	void store(int redis_id, uint8_t *key, int key_len, unsigned char *data,
+			int data_len, bool retried = false) {
 		redisContext *c = _redis_conns[redis_id];
 		redisReply *reply;
 
+		// store it
 		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
+		
+		// if we get NULL reply, we restart the redis connection
+		// and tried it again
+		if (reply == NULL) {
+			create_redis_conn(redis_id);
+			if (!retried) {
+				store(redis_id, key, key_len, data, true);
+			}
+			return;
+		}
 
 		// TODO : check reply and raise exception in case of error
 		freeReplyObject(reply);
@@ -327,29 +360,46 @@ private:
 	/**
 	 * get hash(1) key.
 	 * use last hash or priv_key if we dont have last hash.
-	 * TODO : cache it in memory
+	 * TODO : 
+	 * - avoid memcpy
 	 */ 
-	void get_last_hash(uint32_t volID, uint8_t *key, int *key_len) {
+	void get_last_hash(uint32_t volID, uint8_t *hash, int *hash_len, bool retried = false) {
+		// get last hash from memory
+		auto last_hash = g_last_hash[volID];
+		if (last_hash != NULL) {
+			memcpy(hash, last_hash, HASH_LEN);
+			*hash_len = HASH_LEN;
+			return;
+		}
+
+		// get last hash from DB
 		redisReply *reply;
 		redisContext *c = _redis_conns[0];
 
 		reply = (redisReply *)redisCommand(c, "GET last_hash_%u", volID);
+		if (reply == NULL) {
+			// if we got null, we assume that redis connection is broken
+			// we create it again.
+			create_redis_conn(0);
+			if (!retried) {
+				get_last_hash(volID, hash, hash_len, true);
+			}
+			return;
+		}
 
 		// if there is no last hash, use priv key
-		if (reply == NULL || reply->type == REDIS_REPLY_NIL) {
-			std::cout << "there is no last hash for vol " << volID << ". use priv key\n";
-			memcpy(key, _priv_key.c_str(), _priv_key.length());
-			*key_len = _priv_key.length();
+		if (reply->type == REDIS_REPLY_NIL) {
+			std::cout << "use priv_key as last_hash for vo" << volID << "\n";
+			memcpy(hash, _priv_key.c_str(), _priv_key.length());
+			*hash_len = _priv_key.length();
 			freeReplyObject(reply);
-			redisFree(c);
 			return;
 		}
 		// TODO : handle other error types
 
-		memcpy(key, reply->str, reply->len);
-		*key_len = reply->len;
+		memcpy(hash, reply->str, reply->len);
+		*hash_len = reply->len;
 		freeReplyObject(reply);
-		redisFree(c);
 	}
 
 	void encodeBlock(uint8_t *encoded, int len, TlogBlock::Builder* builder) {
@@ -474,6 +524,7 @@ public:
 
 		gPackets[volID].insert({seq, packet});
 
+		//std::cout << "gPackets size = " << gPackets[volID].size() << "\n";
 		if (gPackets[volID].size() >= FLUSH_SIZE) {
 			if (gSemFlush.try_wait()) {
 				need_flush = _flusher.pick_to_flush(volID, &flush_q);
