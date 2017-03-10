@@ -244,7 +244,7 @@ public:
 
 			if (i == 0) {
 				// it is just for debugging purpose
-				agg.setName(std::to_string(block.getSequence()));
+				agg.setName(std::string("hallo__") + std::to_string(block.getSequence()));
 			}
 		}
 
@@ -310,6 +310,7 @@ private:
 	 * 3. we need to handle if sequence number reset to 0
 	 */
 	bool ok_to_flush(uint32_t volID) {
+		return true;
 		auto packetsMap = gPackets[volID];
 		auto it = packetsMap.cbegin();
 		auto prev = it->first;
@@ -528,8 +529,19 @@ public:
 				// we close it for simplicity.
             	if (buf && buf.size() == BUF_SIZE) {
 					std::memcpy(packet, buf.get(), buf.size());
-					addPacket(packet);
-                	return make_ready_future<stop_iteration>(stop_iteration::no);
+					return add_packet(packet).then([this] (uint32_t vol_id) {
+						return with_semaphore(gSemFlush, 1, [this, vol_id] {
+							//std::cout << "check flush\n";
+							std::queue<uint8_t *> flush_q;
+							if (gPackets[vol_id].size() >= FLUSH_SIZE &&
+									_flusher.pick_to_flush(vol_id, &flush_q)) {
+								_flusher.flush(vol_id, K, M, flush_q);
+							}
+							return make_ready_future<>();
+						});
+					}).then([] {
+						return make_ready_future<stop_iteration>(stop_iteration::no);
+					});
             	} else {
                 	return make_ready_future<stop_iteration>(stop_iteration::yes);
             	}
@@ -540,44 +552,24 @@ public:
 
 	}
 	// add packet to flusher cache
-	void addPacket(uint8_t *packet) {
+	future<uint32_t> add_packet(uint8_t *packet) {
 		// get volume ID
-		uint32_t volID;
+		uint32_t vol_id;
 		uint64_t seq;
-		memcpy(&volID, packet + 24, 4);
+		memcpy(&vol_id, packet + 24, 4);
 		memcpy(&seq, packet + 32, 8);
 
 		// initialize  semaphore if needed
-		if (gSem.find(volID) == gSem.end()) {
-			gSem.emplace(volID, new semaphore(1));
+		if (gSem.find(vol_id) == gSem.end()) {
+			gSem.emplace(vol_id, new semaphore(1));
 		}
 
-		// push the packets and flush if needed
-		bool need_flush = false;
-		std::queue<uint8_t *> flush_q;
+		auto sem = gSem[vol_id];
+		return with_semaphore(*sem, 1, [vol_id, seq, packet] {
+			gPackets[vol_id][seq] = packet;
+			return make_ready_future<uint32_t>(vol_id);
+			});
 
-		auto sem = gSem[volID];
-		sem->wait();
-
-		gPackets[volID][seq] = packet;
-
-		if (gPackets[volID].size() >= FLUSH_SIZE) {
-			if (gSemFlush.try_wait()) {
-				need_flush = _flusher.pick_to_flush(volID, &flush_q);
-				if (!need_flush) {
-					gSemFlush.signal();
-				}
-			}
-		}
-
-		sem->signal();
-
-		// we need to flush outside the gSem lock
-		// to allow other core to insert the packet
-		if (need_flush) {
-			_flusher.flush(volID, K, M, flush_q);
-			gSemFlush.signal();
-		}
 	}
 
 private:
