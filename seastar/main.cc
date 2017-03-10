@@ -47,12 +47,13 @@ static semaphore  g_last_hash_sem{1};
 static std::map<uint32_t, semaphore*> gSem;
 
 /* flush lock, we currently only allow one flusher at a time*/
-static semaphore  gSemFlush{1};
+static semaphore  *gSemFlush = new semaphore(1);
 
 const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
 /* number of tlog before we flush it to storage */
 const int FLUSH_SIZE = 25;
+static int flush_count = 0;
 
 /* len of blake2b hash we want to generate */
 const int HASH_LEN = 32;
@@ -161,7 +162,7 @@ public:
 		// - metadata server (id = 0)
 		// - erasure encoded server (id = 1.. k+m)
 		// create connections to each server
-		for (int i=0; i < 1+k+m; i++) {
+		for (int i=0; i < 1; i++) {
 			create_redis_conn(i);
 		}
 	}
@@ -174,7 +175,7 @@ public:
 			connect(ipaddr).then([this, i, port] (connected_socket s) {
 				auto conn = new redis_conn(std::move(s));
 				std::cout << "connected (" << i << ") port=" << port << "\n";
-				_redis_conns_obj[i] = conn;
+				_redis_conns_obj[i] = std::move(conn);
 			});
 		}
 	}
@@ -199,16 +200,26 @@ public:
 	 * call the flush if needed.
 	 */
 	future<> check_do_flush(uint32_t vol_id) {
-		if (!gSemFlush.try_wait()) {
+		//std::cout << "...." << gPackets[vol_id].size() << "\n";
+		if (gPackets[vol_id].size() < FLUSH_SIZE) {
 			return make_ready_future<>();
 		}
-		std::queue<uint8_t *> flush_q;
-		if (gPackets[vol_id].size() >= FLUSH_SIZE &&
-				pick_to_flush(vol_id, &flush_q)) {
-			flush(vol_id, K, M, flush_q);
+		if (!gSemFlush->try_wait()) {
+			return make_ready_future<>();
 		}
-		gSemFlush.signal();
-		return make_ready_future<>();
+		
+		std::queue<uint8_t *> flush_q;
+		
+		if (pick_to_flush(vol_id, &flush_q) == false) {
+			std::cout << "pick to flush failed\n";
+			gSemFlush->signal();
+			return make_ready_future<>();
+		}
+
+		return flush(vol_id, flush_q).then([] {
+				gSemFlush->signal();
+				return make_ready_future<>();
+				});
 	}
 
 	/**
@@ -222,15 +233,15 @@ public:
 		auto it = gPackets[vol_id].begin();
 		for (int i=0; i  < FLUSH_SIZE && it != gPackets[vol_id].end(); i++) {
 			q->push(it->second);
-			//free(it->second);
 			it = gPackets[vol_id].erase(it);
 		}
 		return true;
 	}
 
 	/* flush the packets to it's storage */
-	void flush(uint32_t volID, int k, int m, std::queue<uint8_t *> pq) {
-		std::cout << ".....\n";
+	future<> flush(uint32_t volID, std::queue<uint8_t *> pq) {
+		flush_count++;
+		std::cout << "-> " << flush_count << "\n";
 		uint8_t last_hash[HASH_LEN];
 		int last_hash_len;
 
@@ -274,14 +285,14 @@ public:
 		kj::ArrayPtr<kj::byte> bs = aos.getArray();
 
 		// erasure encoding
-		Erasurer er(k, m);
+		Erasurer er(_k, _m); // TODO : check if we can reuse this object
 		int chunksize = er.chunksize(bs.size());
 
 		// build the inputs for erasure coding
-		unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * k);
-		for (int i=0; i < k; i++) {
-			int to_copy = i == k -1 ? bs.size() - (chunksize * (k-1)) : chunksize;
-			if (i < k-1) {
+		unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * _k);
+		for (int i=0; i < _k; i++) {
+			int to_copy = i == _k -1 ? bs.size() - (chunksize * (_k-1)) : chunksize;
+			if (i < _k-1) {
 				// we can simply use pointer
 				inputs[i] =  bs.begin() + (chunksize * i);
 			} else {
@@ -293,8 +304,8 @@ public:
 		}
 
 		// allocate coding result
-		unsigned char **coding = (unsigned char **) malloc(sizeof(unsigned char *) * m);
-		for (int i=0; i < m; i++) {
+		unsigned char **coding = (unsigned char **) malloc(sizeof(unsigned char *) * _m);
+		for (int i=0; i < _m; i++) {
 			coding[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
 		}
 
@@ -304,18 +315,23 @@ public:
 		//uint8_t hash[bs.size()];
 		uint8_t *hash = hash_gen(volID, bs.begin(), bs.size(),
 				last_hash, last_hash_len);
-		storeEncodedAgg(volID, hash, hash_len, inputs, coding, k, m, chunksize);
-		free(hash);
+
+		return storeEncodedAgg(volID, hash, hash_len, inputs, coding,
+					chunksize).then([this, hash, inputs, coding] {
+
+					free(hash);
 
 
-		// cleanup erasure coding data
-		free(inputs[k-1]);
-		free(inputs);
-		for(int i=0; i < m; i++) {
-			free(coding[i]);
-		}
-		free(coding);
-
+					// cleanup erasure coding data
+					free(inputs[_k-1]);
+					free(inputs);
+					for(int i=0; i < _m; i++) {
+						free(coding[i]);
+					}
+					free(coding);
+					return make_ready_future<>();
+				});
+	
 	}
 
 private:
@@ -340,24 +356,35 @@ private:
 		}
 		return true;
 	}
-	/**
-	 * store erasure encoded data to redis-compatible server
-	 */
-	void storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len,
-			unsigned char **data, unsigned char **coding, int k, int m, int chunksize) {
-		// TODO make it async
-		// store the data
-		for (int i=0; i < k; i++) {
-			store(i + 1, hash, hash_len, data[i], chunksize);
+	
+	future<> storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len,
+			unsigned char **data, unsigned char **coding, int chunksize) {
+
+		semaphore *finished = new semaphore(0);
+		for (int i=0; i < _k; i++) {
+			auto rc = _redis_conns_obj[i+1];
+			rc->set(hash, hash_len, data[i], chunksize).then([finished] (auto ok){
+					finished->signal();
+					}).or_terminate();
 		}
 		// store the coded data
-		for (int i=0; i < m; i++) {
-			store(k + i + 1, hash, hash_len, coding[i], chunksize);
+		for (int i=0; i < _m; i++) {
+			//store(k + i + 1, hash, hash_len, coding[i], chunksize);
+			auto rc = _redis_conns_obj[i + 1 + _k];
+			rc->set(hash, hash_len, coding[i], chunksize).then([finished] (auto ok){
+					finished->signal();
+					}).or_terminate();
 		}
 
 		// store the hash in both memory and redis
 		std::string last = "last_hash_" + std::to_string(vol_id);
-		store(0, (uint8_t *) last.c_str(), last.length(), (unsigned char *) hash, hash_len);
+
+		auto rc = _redis_conns_obj[0];
+		rc->set((uint8_t *) last.c_str(), last.length(), 
+				(unsigned char *) hash, hash_len).then([finished] (auto ok){
+					finished->signal();
+					}).or_terminate();
+
 		auto old_last = g_last_hash[vol_id];
 		uint8_t *new_hash = (uint8_t *) malloc(hash_len);
 
@@ -368,33 +395,12 @@ private:
 		}
 
 		g_last_hash[vol_id] = new_hash;
+		return finished->wait(_k + _m + 1).then([finished] {
+				delete finished;
+				return make_ready_future<>();
+				});
 	}
 
-
-	/**
-	 * store data to redis compatible server
-	 */
-	void store(int redis_id, uint8_t *key, int key_len, unsigned char *data,
-			int data_len, bool retried = false) {
-		redisContext *c = _redis_conns[redis_id];
-		redisReply *reply;
-
-		// store it
-		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
-
-		// if we get NULL reply, we restart the redis connection
-		// and tried it again
-		if (reply == NULL) {
-			create_redis_conn(redis_id);
-			if (!retried) {
-				store(redis_id, key, key_len, data, true);
-			}
-			return;
-		}
-
-		// TODO : check reply and raise exception in case of error
-		freeReplyObject(reply);
-	}
 
 	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len,
 			uint8_t *key, int key_len) {

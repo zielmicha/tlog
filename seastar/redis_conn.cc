@@ -45,7 +45,6 @@ future<bool> redis_conn::set(const uint8_t *key, int key_len,
 			return _in.read();
 		}).then([this] (auto buf) {
 			auto str = std::string(buf.get(), buf.size());
-			std::cout << "resp=" <<  str << "\n";
 			return make_ready_future<bool>(str=="+ok\r\n");
 		});
 }
