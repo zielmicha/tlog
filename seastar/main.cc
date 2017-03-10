@@ -6,6 +6,7 @@
 #include "core/distributed.hh"
 #include "core/bitops.hh"
 #include "core/sleep.hh"
+#include "redis_conn.h"
 
 #include <stdio.h>
 #include "tlog_schema.capnp.h"
@@ -136,25 +137,45 @@ public:
 
 class Flusher {
 private:
+	int _k;
+	int _m;
 	std::string _objstor_addr;
 	int _objstor_port;
 	std::string _priv_key;
 	std::vector<redisContext *> _redis_conns;
+	std::vector<redis_conn *> _redis_conns_obj;
 public:
 	Flusher() {
 	}
 	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, int k, int m)
-	: _objstor_addr(objstor_addr)
+	: _k(k)
+	, _m(m)
+	, _objstor_addr(objstor_addr)
 	, _objstor_port(objstor_port)
 	, _priv_key(priv_key)
 	{
 		_redis_conns.resize(k+m+1);
+		_redis_conns_obj.reserve(_k + _m + 1);
+		_redis_conns_obj.resize(_k + _m + 1);
 		// create conenctions to -
 		// - metadata server (id = 0)
 		// - erasure encoded server (id = 1.. k+m)
 		// create connections to each server
 		for (int i=0; i < 1+k+m; i++) {
 			create_redis_conn(i);
+		}
+	}
+
+	void init_redis_conns() {
+		auto num = 1 + _k + _m;
+		for(int i=0; i < num; i++) {
+			auto port = _objstor_port + i;
+			auto ipaddr = make_ipv4_address(ipv4_addr(_objstor_addr,port));
+			connect(ipaddr).then([this, i, port] (connected_socket s) {
+				auto conn = new redis_conn(std::move(s));
+				std::cout << "connected (" << i << ") port=" << port << "\n";
+				_redis_conns_obj[i] = conn;
+			});
 		}
 	}
 
@@ -193,7 +214,7 @@ public:
 
 	/* flush the packets to it's storage */
 	void flush(uint32_t volID, int k, int m, std::queue<uint8_t *> pq) {
-		//std::cout << ".\n";
+		std::cout << ".....\n";
 		uint8_t last_hash[HASH_LEN];
 		int last_hash_len;
 
@@ -212,12 +233,19 @@ public:
 		// check if we can use packet's memory, to avoid memcpy
 		auto blocks = agg.initBlocks(pq.size());
 
+		// TODO : find a way to reuse packet data to avoid
+		// memcpy
 		for (int i=0; !pq.empty(); i++) {
 			auto block = blocks[i];
 			auto packet = pq.front();
 			pq.pop();
 			encodeBlock(packet, BUF_SIZE, &block);
 			free(packet);
+
+			if (i == 0) {
+				// it is just for debugging purpose
+				agg.setName(std::to_string(block.getSequence()));
+			}
 		}
 
 
@@ -282,7 +310,6 @@ private:
 	 * 3. we need to handle if sequence number reset to 0
 	 */
 	bool ok_to_flush(uint32_t volID) {
-		return true;
 		auto packetsMap = gPackets[volID];
 		auto it = packetsMap.cbegin();
 		auto prev = it->first;
@@ -334,6 +361,7 @@ private:
 			int data_len, bool retried = false) {
 		redisContext *c = _redis_conns[redis_id];
 		redisReply *reply;
+		//return;
 
 		// store it
 		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
@@ -378,7 +406,6 @@ private:
 			return;
 		}
 
-		std::cerr << "WARNING...still execute redis...\n";
 		// get last hash from DB
 		redisReply *reply;
 		redisContext *c = _redis_conns[0];
@@ -464,6 +491,7 @@ public:
         , _port(port)
     {
 		_flusher = Flusher(_objstor_addr, _objstor_port, _priv_key, K, M);
+		_flusher.init_redis_conns();
 		std::cout << "start tlog with objstor_addr = " << _objstor_addr << ". objstor port = " << _objstor_port << "\n";
 	}
 
@@ -531,7 +559,7 @@ public:
 		auto sem = gSem[volID];
 		sem->wait();
 
-		gPackets[volID].insert({seq, packet});
+		gPackets[volID][seq] = packet;
 
 		if (gPackets[volID].size() >= FLUSH_SIZE) {
 			if (gSemFlush.try_wait()) {
