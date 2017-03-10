@@ -160,8 +160,6 @@ public:
 		_redis_conns_obj.resize(_k + _m + 1);
 		// create conenctions to -
 		// - metadata server (id = 0)
-		// - erasure encoded server (id = 1.. k+m)
-		// create connections to each server
 		for (int i=0; i < 1; i++) {
 			create_redis_conn(i);
 		}
@@ -201,24 +199,25 @@ public:
 	 */
 	future<> check_do_flush(uint32_t vol_id) {
 		//std::cout << "...." << gPackets[vol_id].size() << "\n";
-		if (gPackets[vol_id].size() < FLUSH_SIZE) {
+		if (!gSemFlush->try_wait()) {
 			return make_ready_future<>();
 		}
-		if (!gSemFlush->try_wait()) {
+		if (gPackets[vol_id].size() < FLUSH_SIZE) {
+			gSemFlush->signal();
 			return make_ready_future<>();
 		}
 		
 		std::queue<uint8_t *> flush_q;
 		
 		if (pick_to_flush(vol_id, &flush_q) == false) {
-			std::cout << "pick to flush failed\n";
 			gSemFlush->signal();
 			return make_ready_future<>();
 		}
 
-		return flush(vol_id, flush_q).then([] {
+		return flush(vol_id, flush_q).then([this, vol_id] {
 				gSemFlush->signal();
-				return make_ready_future<>();
+				//return make_ready_future<>();
+				return check_do_flush(vol_id);
 				});
 	}
 
@@ -355,6 +354,10 @@ private:
 			++it;
 		}
 		return true;
+	}
+	future<> storeEncodedAgg1(uint64_t vol_id, uint8_t *hash, int hash_len,
+			unsigned char **data, unsigned char **coding, int chunksize) {
+		return make_ready_future<>();
 	}
 	
 	future<> storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len,
