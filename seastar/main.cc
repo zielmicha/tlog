@@ -194,6 +194,22 @@ public:
 		return c;
 	}
 
+	/**
+	 * check if need and able to flush to certain volume.
+	 * call the flush if needed.
+	 */
+	future<> check_do_flush(uint32_t vol_id) {
+		if (!gSemFlush.try_wait()) {
+			return make_ready_future<>();
+		}
+		std::queue<uint8_t *> flush_q;
+		if (gPackets[vol_id].size() >= FLUSH_SIZE &&
+				pick_to_flush(vol_id, &flush_q)) {
+			flush(vol_id, K, M, flush_q);
+		}
+		gSemFlush.signal();
+		return make_ready_future<>();
+	}
 
 	/**
 	 * pick packets to be flushed.
@@ -362,7 +378,6 @@ private:
 			int data_len, bool retried = false) {
 		redisContext *c = _redis_conns[redis_id];
 		redisReply *reply;
-		//return;
 
 		// store it
 		reply = (redisReply *)redisCommand(c, "SET %b %b", key, key_len, data, data_len);
@@ -530,15 +545,7 @@ public:
             	if (buf && buf.size() == BUF_SIZE) {
 					std::memcpy(packet, buf.get(), buf.size());
 					return add_packet(packet).then([this] (uint32_t vol_id) {
-						return with_semaphore(gSemFlush, 1, [this, vol_id] {
-							//std::cout << "check flush\n";
-							std::queue<uint8_t *> flush_q;
-							if (gPackets[vol_id].size() >= FLUSH_SIZE &&
-									_flusher.pick_to_flush(vol_id, &flush_q)) {
-								_flusher.flush(vol_id, K, M, flush_q);
-							}
-							return make_ready_future<>();
-						});
+						return _flusher.check_do_flush(vol_id);
 					}).then([] {
 						return make_ready_future<stop_iteration>(stop_iteration::no);
 					});
@@ -551,6 +558,7 @@ public:
     	});
 
 	}
+
 	// add packet to flusher cache
 	future<uint32_t> add_packet(uint8_t *packet) {
 		// get volume ID
