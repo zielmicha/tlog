@@ -24,6 +24,7 @@
 #include <isa-l/erasure_code.h>
 #include <assert.h>
 #include <map>
+#include "core/shared_mutex.hh"
 
 #define PLATFORM "seastar"
 #define VERSION "v1.0"
@@ -43,11 +44,11 @@ static std::map<uint32_t, std::map<uint32_t, uint8_t *>> gPackets;
 static std::map<uint32_t, uint8_t *> g_last_hash;
 static semaphore  g_last_hash_sem{1};
 
-/* map of semaphore, one per volume ID */
-static std::map<uint32_t, semaphore*> gSem;
+/* add_packet mutex, one per volume ID */
+static std::map<uint32_t, seastar::shared_mutex*> g_packet_mutex;
 
 /* flush lock, we currently only allow one flusher at a time*/
-static semaphore  *gSemFlush = new semaphore(1);
+static semaphore  *g_sem_flush = new semaphore(1);
 
 const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
@@ -197,36 +198,50 @@ public:
 	 * check if need and able to flush to certain volume.
 	 * call the flush if needed.
 	 */
-	future<> check_do_flush(uint32_t vol_id) {
+	future<bool> check_do_flush(uint32_t vol_id) {
 		//std::cout << "...." << gPackets[vol_id].size() << "\n";
-		if (!gSemFlush->try_wait()) {
-			return make_ready_future<>();
+		if (!g_sem_flush->try_wait()) {
+			return make_ready_future<bool>(false);
 		}
 		if (gPackets[vol_id].size() < FLUSH_SIZE) {
-			gSemFlush->signal();
-			return make_ready_future<>();
+			g_sem_flush->signal();
+			return make_ready_future<bool>(false);
 		}
 		
 		std::queue<uint8_t *> flush_q;
 		
-		if (pick_to_flush(vol_id, &flush_q) == false) {
-			gSemFlush->signal();
-			return make_ready_future<>();
-		}
-
-		return flush(vol_id, flush_q).then([this, vol_id] {
-				gSemFlush->signal();
-				//return make_ready_future<>();
-				return check_do_flush(vol_id);
-				});
+		return this->pick_to_flush(vol_id, &flush_q).then([this, vol_id, &flush_q] (auto ok) {
+				if (!ok) {
+					g_sem_flush->signal();
+					return make_ready_future<bool>(false);
+				} else {
+					return this->flush(vol_id, flush_q).then([this, vol_id] {
+						g_sem_flush->signal();
+						//return make_ready_future<bool>(true);
+						return this->check_do_flush(vol_id);
+					});
+				}
+		});
 	}
 
 	/**
 	 * pick packets to be flushed.
 	 * It must be called under flush & sem lock
 	 */
-	bool pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q) {
-		if (!ok_to_flush(vol_id)) {
+	future<bool> pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q) {
+		return with_lock(*g_packet_mutex[vol_id], [this,vol_id, &q]{
+			if (!ok_to_flush(vol_id)) {
+				return make_ready_future<bool>(false);
+			}
+			auto it = gPackets[vol_id].begin();
+			for (int i=0; i  < FLUSH_SIZE && it != gPackets[vol_id].end(); i++) {
+				q->push(it->second);
+				it = gPackets[vol_id].erase(it);
+			}
+			return make_ready_future<bool>(true);
+		});
+
+		/*if (!ok_to_flush(vol_id)) {
 			return false;
 		}
 		auto it = gPackets[vol_id].begin();
@@ -234,7 +249,7 @@ public:
 			q->push(it->second);
 			it = gPackets[vol_id].erase(it);
 		}
-		return true;
+		return true;*/
 	}
 
 	/* flush the packets to it's storage */
@@ -555,7 +570,7 @@ public:
 					std::memcpy(packet, buf.get(), buf.size());
 					return add_packet(packet).then([this] (uint32_t vol_id) {
 						return _flusher.check_do_flush(vol_id);
-					}).then([] {
+					}).then([] (auto ok){
 						return make_ready_future<stop_iteration>(stop_iteration::no);
 					});
             	} else {
@@ -576,17 +591,15 @@ public:
 		memcpy(&vol_id, packet + 24, 4);
 		memcpy(&seq, packet + 32, 8);
 
-		// initialize  semaphore if needed
-		if (gSem.find(vol_id) == gSem.end()) {
-			gSem.emplace(vol_id, new semaphore(1));
+		// initialize mutex if needed
+		if (g_packet_mutex.find(vol_id) == g_packet_mutex.end()) {
+			g_packet_mutex.emplace(vol_id, new seastar::shared_mutex());
 		}
 
-		auto sem = gSem[vol_id];
-		return with_semaphore(*sem, 1, [vol_id, seq, packet] {
+		return with_lock(*g_packet_mutex[vol_id], [vol_id, seq, packet] {
 			gPackets[vol_id][seq] = packet;
 			return make_ready_future<uint32_t>(vol_id);
 			});
-
 	}
 
 private:
