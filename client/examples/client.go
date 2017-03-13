@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"sync"
 
 	"github.com/g8os/tlog/client"
 )
@@ -11,6 +10,8 @@ func main() {
 	var volID uint32 = 0x1f
 	num_conn := 2
 	clients := make([]*client.Client, num_conn)
+	clientReady := make(chan int, num_conn)
+	seqChan := make(chan uint64, 8)
 
 	for i := 0; i < num_conn; i++ {
 		client, err := client.New("127.0.0.1:11211")
@@ -18,25 +19,29 @@ func main() {
 			log.Fatal(err)
 		}
 		clients[i] = client
+		clientReady <- i
 	}
 	data := make([]byte, 4096*4)
 
-	var wg sync.WaitGroup
-
-	for i := 0; i < 30; i++ {
-		wg.Add(1)
-		act := func(j int) {
-			defer wg.Done()
-			client := clients[j%num_conn]
-
-			err := client.Send(volID, uint64(j), uint32(j), uint64(j), uint64(j), data)
-			if err != nil {
-				log.Fatalf("failed to send :%v", err)
-			}
-
+	// produce the data
+	go func() {
+		for i := 0; i < 25*4000; i++ {
+			seqChan <- uint64(i)
 		}
-		//go act(i)
-		act(i)
+	}()
+
+	for seq := range seqChan {
+		idx := <-clientReady
+		go func(j uint64, idx int) {
+			client := clients[int(j)%num_conn]
+
+			log.Printf("j=%v\n", j)
+			err := client.Send(volID, j, uint32(j), j, j, data)
+			if err != nil {
+				log.Printf("client %v died\n", idx)
+				return
+			}
+			clientReady <- idx
+		}(seq, idx)
 	}
-	wg.Wait()
 }
