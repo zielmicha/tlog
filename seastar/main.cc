@@ -6,25 +6,30 @@
 #include "core/distributed.hh"
 #include "core/bitops.hh"
 #include "core/sleep.hh"
-#include "redis_conn.h"
+#include "core/semaphore.hh"
 
-#include <stdio.h>
+// C++
+#include <iostream>
+#include <vector>
+#include <queue>
+#include <assert.h>
+#include <map>
+
+
+//#include <stdio.h>
+// capnp
 #include "tlog_schema.capnp.h"
 #include <capnp/message.h>
 #include <kj/io.h>
 #include <kj/common.h>
 #include <capnp/serialize-packed.h>
-#include <iostream>
-#include <vector>
-#include <queue>
-#include "core/queue.hh"
-#include "core/semaphore.hh"
+
+// other lib
 #include <hiredis/hiredis.h>
 #include <blake2.h>
 #include <isa-l/erasure_code.h>
-#include <assert.h>
-#include <map>
-#include "core/shared_mutex.hh"
+
+#include "redis_conn.h"
 
 #define PLATFORM "seastar"
 #define VERSION "v1.0"
@@ -37,18 +42,8 @@ namespace tlog {
 
 using clock_type = lowres_clock;
 
-/* map of packets queue, one per volume ID */
-static std::map<uint32_t, std::map<uint32_t, uint8_t *>> gPackets;
-
 /* save last hash to memory */
 static std::map<uint32_t, uint8_t *> g_last_hash;
-static semaphore  g_last_hash_sem{1};
-
-/* add_packet mutex, one per volume ID */
-static std::map<uint32_t, seastar::shared_mutex*> g_packet_mutex;
-
-/* flush lock, we currently only allow one flusher at a time*/
-static semaphore  *g_sem_flush = new semaphore(1);
 
 const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
@@ -144,8 +139,9 @@ private:
 	std::string _objstor_addr;
 	int _objstor_port;
 	std::string _priv_key;
-	std::vector<redisContext *> _redis_conns;
-	std::vector<redis_conn *> _redis_conns_obj;
+	redisContext* _meta_redis_conn;
+	std::vector<redis_conn *> _redis_conns;
+	std::map<uint32_t, std::map<uint32_t, uint8_t *>> _packets;
 public:
 	Flusher() {
 	}
@@ -157,14 +153,13 @@ public:
 	, _priv_key(priv_key)
 	{
 		_redis_conns.resize(k+m+1);
-		_redis_conns_obj.reserve(_k + _m + 1);
-		_redis_conns_obj.resize(_k + _m + 1);
-		// create conenctions to -
-		// - metadata server (id = 0)
-		for (int i=0; i < 1; i++) {
-			create_redis_conn(i);
-		}
+		_redis_conns.reserve(_k + _m + 1);
+		_redis_conns.resize(_k + _m + 1);
+		
+		// create conenctions to metadata server
+		_meta_redis_conn = create_meta_redis_conn();
 	}
+
 
 	void init_redis_conns() {
 		auto num = 1 + _k + _m;
@@ -173,89 +168,63 @@ public:
 			auto ipaddr = make_ipv4_address(ipv4_addr(_objstor_addr,port));
 			connect(ipaddr).then([this, i, port] (connected_socket s) {
 				auto conn = new redis_conn(std::move(s));
-				std::cout << "connected (" << i << ") port=" << port << "\n";
-				_redis_conns_obj[i] = std::move(conn);
+				_redis_conns[i] = std::move(conn);
 			});
 		}
 	}
 
-	redisContext *create_redis_conn(int id) {
-		std::cout << "creating redis conn for id=" << id << "\n";
-
-		auto port = _objstor_port + id;
+	redisContext *create_meta_redis_conn() {
+		auto port = _objstor_port;
 
 		redisContext *c = redisConnect(_objstor_addr.c_str(), port);
 
 		if (c == NULL || c->err || redisEnableKeepAlive(c) != REDIS_OK) {
-			std::cout << "connect:" << _objstor_addr << ":"<< port << "\n" << std::flush;
 			exit(-1); // TODO raise exception
 		}
-		_redis_conns[id] = c;
 		return c;
+	}
+
+	void add_packet(uint8_t *packet, uint32_t vol_id, uint64_t seq) {
+		_packets[vol_id][seq] = packet;
 	}
 
 	/**
 	 * check if need and able to flush to certain volume.
 	 * call the flush if needed.
 	 */
-	future<bool> check_do_flush(uint32_t vol_id) {
-		//std::cout << "...." << gPackets[vol_id].size() << "\n";
-		if (!g_sem_flush->try_wait()) {
-			return make_ready_future<bool>(false);
-		}
-		if (gPackets[vol_id].size() < FLUSH_SIZE) {
-			g_sem_flush->signal();
-			return make_ready_future<bool>(false);
-		}
-		
+	future<> check_do_flush(uint32_t vol_id) {
 		std::queue<uint8_t *> flush_q;
 		
-		return this->pick_to_flush(vol_id, &flush_q).then([this, vol_id, &flush_q] (auto ok) {
-				if (!ok) {
-					g_sem_flush->signal();
-					return make_ready_future<bool>(false);
-				} else {
-					return this->flush(vol_id, flush_q).then([this, vol_id] {
-						g_sem_flush->signal();
-						//return make_ready_future<bool>(true);
-						return this->check_do_flush(vol_id);
-					});
-				}
-		});
+		if (_packets[vol_id].size() < FLUSH_SIZE) {
+			return make_ready_future<>();
+		}
+		
+		if (pick_to_flush(vol_id, &flush_q) == false) {
+			return make_ready_future<>();
+		}
+		return flush(vol_id, flush_q);
 	}
 
 	/**
 	 * pick packets to be flushed.
 	 * It must be called under flush & sem lock
 	 */
-	future<bool> pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q) {
-		return with_lock(*g_packet_mutex[vol_id], [this,vol_id, &q]{
-			if (!ok_to_flush(vol_id)) {
-				return make_ready_future<bool>(false);
-			}
-			auto it = gPackets[vol_id].begin();
-			for (int i=0; i  < FLUSH_SIZE && it != gPackets[vol_id].end(); i++) {
-				q->push(it->second);
-				it = gPackets[vol_id].erase(it);
-			}
-			return make_ready_future<bool>(true);
-		});
-
-		/*if (!ok_to_flush(vol_id)) {
+	bool pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q) {
+		if (!ok_to_flush(vol_id)) {
 			return false;
 		}
-		auto it = gPackets[vol_id].begin();
-		for (int i=0; i  < FLUSH_SIZE && it != gPackets[vol_id].end(); i++) {
+		auto it = _packets[vol_id].begin();
+		for (int i=0; i  < FLUSH_SIZE && it != _packets[vol_id].end(); i++) {
 			q->push(it->second);
-			it = gPackets[vol_id].erase(it);
+			it = _packets[vol_id].erase(it);
 		}
-		return true;*/
+		return true;
 	}
 
 	/* flush the packets to it's storage */
 	future<> flush(uint32_t volID, std::queue<uint8_t *> pq) {
 		flush_count++;
-		std::cout << "-> " << flush_count << "\n";
+		std::cout << "-> " << flush_count << " at " << engine().cpu_id() << "\n";
 		uint8_t last_hash[HASH_LEN];
 		int last_hash_len;
 
@@ -282,11 +251,6 @@ public:
 			pq.pop();
 			encodeBlock(packet, BUF_SIZE, &block);
 			free(packet);
-
-			if (i == 0) {
-				// it is just for debugging purpose
-				agg.setName(std::string("hallo__") + std::to_string(block.getSequence()));
-			}
 		}
 
 
@@ -357,7 +321,7 @@ private:
 	 */
 	bool ok_to_flush(uint32_t volID) {
 		return true;
-		auto packetsMap = gPackets[volID];
+		auto packetsMap = _packets[volID];
 		auto it = packetsMap.cbegin();
 		auto prev = it->first;
 		++it;
@@ -370,6 +334,7 @@ private:
 		}
 		return true;
 	}
+	/* only used in testing */
 	future<> storeEncodedAgg1(uint64_t vol_id, uint8_t *hash, int hash_len,
 			unsigned char **data, unsigned char **coding, int chunksize) {
 		return make_ready_future<>();
@@ -380,7 +345,7 @@ private:
 
 		semaphore *finished = new semaphore(0);
 		for (int i=0; i < _k; i++) {
-			auto rc = _redis_conns_obj[i+1];
+			auto rc = _redis_conns[i+1];
 			rc->set(hash, hash_len, data[i], chunksize).then([finished] (auto ok){
 					finished->signal();
 					}).or_terminate();
@@ -388,7 +353,7 @@ private:
 		// store the coded data
 		for (int i=0; i < _m; i++) {
 			//store(k + i + 1, hash, hash_len, coding[i], chunksize);
-			auto rc = _redis_conns_obj[i + 1 + _k];
+			auto rc = _redis_conns[i + 1 + _k];
 			rc->set(hash, hash_len, coding[i], chunksize).then([finished] (auto ok){
 					finished->signal();
 					}).or_terminate();
@@ -397,7 +362,7 @@ private:
 		// store the hash in both memory and redis
 		std::string last = "last_hash_" + std::to_string(vol_id);
 
-		auto rc = _redis_conns_obj[0];
+		auto rc = _redis_conns[0];
 		rc->set((uint8_t *) last.c_str(), last.length(), 
 				(unsigned char *) hash, hash_len).then([finished] (auto ok){
 					finished->signal();
@@ -448,13 +413,11 @@ private:
 
 		// get last hash from DB
 		redisReply *reply;
-		redisContext *c = _redis_conns[0];
-
-		reply = (redisReply *)redisCommand(c, "GET last_hash_%u", volID);
+		reply = (redisReply *)redisCommand(_meta_redis_conn, "GET last_hash_%u", volID);
 		if (reply == NULL) {
 			// if we got null, we assume that redis connection is broken
 			// we create it again.
-			create_redis_conn(0);
+			_meta_redis_conn = create_meta_redis_conn();
 			if (!retried) {
 				get_last_hash(volID, hash, hash_len, true);
 			}
@@ -568,9 +531,7 @@ public:
 				// we close it for simplicity.
             	if (buf && buf.size() == BUF_SIZE) {
 					std::memcpy(packet, buf.get(), buf.size());
-					return add_packet(packet).then([this] (uint32_t vol_id) {
-						return _flusher.check_do_flush(vol_id);
-					}).then([] (auto ok){
+					return handle_packet(packet).then([]{
 						return make_ready_future<stop_iteration>(stop_iteration::no);
 					});
             	} else {
@@ -583,23 +544,17 @@ public:
 
 	}
 
-	// add packet to flusher cache
-	future<uint32_t> add_packet(uint8_t *packet) {
+	future<> handle_packet(uint8_t *packet) {
 		// get volume ID
 		uint32_t vol_id;
 		uint64_t seq;
 		memcpy(&vol_id, packet + 24, 4);
 		memcpy(&seq, packet + 32, 8);
 
-		// initialize mutex if needed
-		if (g_packet_mutex.find(vol_id) == g_packet_mutex.end()) {
-			g_packet_mutex.emplace(vol_id, new seastar::shared_mutex());
-		}
-
-		return with_lock(*g_packet_mutex[vol_id], [vol_id, seq, packet] {
-			gPackets[vol_id][seq] = packet;
-			return make_ready_future<uint32_t>(vol_id);
-			});
+		return smp::submit_to(0, [this, packet, vol_id, seq] {
+				_flusher.add_packet(packet, vol_id, seq);
+				return _flusher.check_do_flush(vol_id);
+				});
 	}
 
 private:
