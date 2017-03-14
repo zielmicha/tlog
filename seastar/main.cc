@@ -20,9 +20,20 @@
 #define VERSION "v1.0"
 #define VERSION_STRING PLATFORM " " VERSION
 
-future<> slow() {
-    return sleep(std::chrono::seconds(10000000));
+future<> periodic_flush() {
+        return do_for_each(boost::counting_iterator<int>(0),
+                boost::counting_iterator<int>((int)smp::count),
+                [] (int i) {
+				return smp::submit_to(i, [] {
+					auto flusher = get_flusher(engine().cpu_id());
+					return flusher->periodic_flush();
+				});
+        }).then([] {
+            // wait one second before starting the next iteration
+            return sleep(std::chrono::seconds(1));
+        });
 }
+
 namespace tlog {
 
 static std::vector<void *> servers;
@@ -34,6 +45,10 @@ const int BUF_SIZE = 16472; /* size of the message we receive from client */
 /* erasure encoding variable */
 int K = 4;
 int M = 2;
+
+/* flush settings */
+int FLUSH_TIME;
+int FLUSH_SIZE;
 
 struct system_stats {
     uint32_t _curr_connections {};
@@ -101,7 +116,8 @@ public:
 		, _priv_key(priv_key)
         , _port(port)
     {
-		_flusher = Flusher(_objstor_addr, _objstor_port, _priv_key, K, M);
+		_flusher = Flusher(_objstor_addr, _objstor_port, _priv_key, 
+				FLUSH_SIZE, FLUSH_TIME, K, M);
 		
 		// TODO : for some unknown reason, it can't be put into constructor
 		_flusher.post_init();
@@ -183,6 +199,8 @@ int main(int ac, char** av) {
 
 	app.add_options()
 		("port", bpo::value<uint16_t>()->default_value(11211), "tcp port")
+		("flush_size", bpo::value<int>()->default_value(25), "flush_size")
+		("flush_time", bpo::value<int>()->default_value(25), "flush_time (seconds)")
 		("k", bpo::value<int>()->default_value(4), "K variable of erasure encoding")
 		("m", bpo::value<int>()->default_value(2), "M variable of erasure encoding")
 		("objstor_addr", bpo::value<std::string>()->default_value("127.0.0.1"), "objstor address")
@@ -202,6 +220,8 @@ int main(int ac, char** av) {
 		std::string priv_key = config["priv_key"].as<std::string>();
 		tlog::K = config["k"].as<int>();
 		tlog::M = config["m"].as<int>();
+		tlog::FLUSH_SIZE = config["flush_size"].as<int>();
+		tlog::FLUSH_TIME = config["flush_time"].as<int>();
 
 		// print options
 		std::cout << "======= TLOG server options ======\n";
@@ -209,6 +229,8 @@ int main(int ac, char** av) {
 		std::cout << "objstor_addr = " << objstor_addr << "\n";
 		std::cout << "objstor_port = " << objstor_port << "\n";
 		std::cout << "erasure encoding K="<< tlog::K << ". M = " << tlog::M << "\n";
+		std::cout << "flush size = " << tlog::FLUSH_TIME << " packets\n";
+		std::cout << "flush time = " << tlog::FLUSH_TIME << " seconds\n";
 		std::cout << "private key = " << priv_key << "\n";
 		std::cout << "==================================\n";
 
@@ -221,11 +243,8 @@ int main(int ac, char** av) {
         }).then([&tcp_server] {
             return tcp_server.invoke_on_all(&tlog::tcp_server::start);
         }).then([start_stats = config.count("stats")] {
-            // what we really wanted to do here is to
-            // avoid the server to exit
-            // need a better way here than sleeping
             return repeat([] {
-                return slow().then([] { return stop_iteration::no; });
+                return periodic_flush().then([] { return stop_iteration::no; });
             });
         });
     });

@@ -5,6 +5,8 @@
 #include "core/future-util.hh"
 #include "core/app-template.hh"
 
+#include <ctime>
+
 // capnp
 #include "tlog_schema.capnp.h"
 #include <capnp/message.h>
@@ -63,21 +65,48 @@ public:
 
 class Flusher {
 private:
+	/* min number of packets before being flushed */
+	int _flush_size;
+
+	/* min number of seconds before packets being flushed
+	 * without waiting it to reach _flush_size
+	 */
+	int _flush_timeout;
+
+	/* K value of erasure encoding */
 	int _k;
+
+	/* M value of erasure encoding */
 	int _m;
+
+	/* objstor address and port */
 	std::string _objstor_addr;
 	int _objstor_port;
+
+	/* private key */
 	std::string _priv_key;
+
+	/* connection to redis meta server */
 	redisContext* _meta_redis_conn;
+
+	/* connection to storage servers */
 	std::vector<redis_conn *> _redis_conns;
+
+	/* packets cache by volume id*/
 	std::map<uint32_t, std::map<uint64_t, uint8_t *>> _packets;
+
+	/* last time we do flushing per volume id*/
+	std::map<uint32_t, time_t> _last_flush_time;
 public:
 	Flusher() {
 	}
-	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, int k, int m);
+	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, 
+			int flush_size, int flush_timeout, int k, int m);
 	void add_packet(uint8_t *packet, uint32_t vol_id, uint64_t seq);
 
 	future<> check_do_flush(uint32_t vol_id);
+	
+	future<> periodic_flush();
 
 	void post_init();
 
@@ -86,11 +115,11 @@ private:
 	
 	void create_meta_redis_conn();
 
-	bool pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q);
+	bool pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q, int flush_size);
 
 	future<> flush(uint32_t volID, std::queue<uint8_t *> pq);
 
-	bool ok_to_flush(uint32_t volID);
+	bool ok_to_flush(uint32_t vol_id, int flush_size);
 
 	future<> storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len,
 			unsigned char **data, unsigned char **coding, int chunksize);
