@@ -70,54 +70,21 @@ private:
 	std::string _priv_key;
 	redisContext* _meta_redis_conn;
 	std::vector<redis_conn *> _redis_conns;
-	std::map<uint32_t, std::map<uint32_t, uint8_t *>> _packets;
+	std::map<uint32_t, std::map<uint64_t, uint8_t *>> _packets;
 public:
 	Flusher() {
 	}
-	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, int k, int m)
-	: _k(k)
-	, _m(m)
-	, _objstor_addr(objstor_addr)
-	, _objstor_port(objstor_port)
-	, _priv_key(priv_key)
-	{
-		_redis_conns.resize(k+m+1);
-		_redis_conns.reserve(_k + _m + 1);
-		_redis_conns.resize(_k + _m + 1);
-		
-		// create conenctions to metadata server
-		_meta_redis_conn = create_meta_redis_conn();
-	}
-
-
-	void init_redis_conns() {
-		auto num = 1 + _k + _m;
-		for(int i=0; i < num; i++) {
-			auto port = _objstor_port + i;
-			auto ipaddr = make_ipv4_address(ipv4_addr(_objstor_addr,port));
-			connect(ipaddr).then([this, i, port] (connected_socket s) {
-				auto conn = new redis_conn(std::move(s));
-				_redis_conns[i] = std::move(conn);
-			});
-		}
-	}
-
-	redisContext *create_meta_redis_conn() {
-		auto port = _objstor_port;
-
-		redisContext *c = redisConnect(_objstor_addr.c_str(), port);
-
-		if (c == NULL || c->err || redisEnableKeepAlive(c) != REDIS_OK) {
-			exit(-1); // TODO raise exception
-		}
-		return c;
-	}
-
-	void add_packet(uint8_t *packet, uint32_t vol_id, uint64_t seq) {
-		_packets[vol_id][seq] = packet;
-	}
+	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, int k, int m);
+	void add_packet(uint8_t *packet, uint32_t vol_id, uint64_t seq);
 
 	future<> check_do_flush(uint32_t vol_id);
+
+	void post_init();
+
+private:
+	void init_redis_conns();
+	
+	void create_meta_redis_conn();
 
 	bool pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q);
 
@@ -136,4 +103,5 @@ public:
 	void encodeBlock(uint8_t *encoded, int len, TlogBlock::Builder* builder);
 };
 
+Flusher* get_flusher(shard_id id);
 #endif

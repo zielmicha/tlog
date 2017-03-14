@@ -16,6 +16,7 @@
 
 static int flush_count = 0;
 
+static std::vector<Flusher *> _flushers(100);
 /* save last hash to memory */
 static std::map<uint32_t, uint8_t *> g_last_hash;
 
@@ -32,6 +33,55 @@ static const int CAPNP_OUTBUF_EXTRA = 300;
 
 /* number of tlog before we flush it to storage */
 const int FLUSH_SIZE = 25;
+
+Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, int k, int m)
+	: _k(k)
+	, _m(m)
+	, _objstor_addr(objstor_addr)
+	, _objstor_port(objstor_port)
+	, _priv_key(priv_key)
+{
+	_redis_conns.reserve(_k + _m + 1);
+	_redis_conns.resize(_k + _m + 1);
+	
+	create_meta_redis_conn();
+}
+
+/**
+ * post_init contains steps that (for unknown reason)
+ * can't be put inside the class constructor
+ */
+void Flusher::post_init() {
+	_flushers[engine().cpu_id()] = this;
+	init_redis_conns();
+}
+
+void Flusher::add_packet(uint8_t *packet, uint32_t vol_id, uint64_t seq){
+	this->_packets[vol_id][seq] = packet;
+}
+
+void Flusher::init_redis_conns() {
+	auto num = 1 + _k + _m;
+		
+	for(int i=0; i < num; i++) {
+		auto port = _objstor_port + i;
+		auto ipaddr = make_ipv4_address(ipv4_addr(_objstor_addr,port));
+		connect(ipaddr).then([this, i, port] (connected_socket s) {
+				auto conn = new redis_conn(std::move(s));
+				_redis_conns[i] = std::move(conn);
+				});
+	}
+}
+
+void Flusher::create_meta_redis_conn() {
+	auto port = _objstor_port;
+
+	redisContext *c = redisConnect(_objstor_addr.c_str(), port);
+	if (c == NULL || c->err || redisEnableKeepAlive(c) != REDIS_OK) {
+		exit(-1); // TODO raise exception
+	}
+	_meta_redis_conn = c;
+}
 
 
 /**
@@ -67,11 +117,15 @@ bool Flusher::pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q) {
 	return true;
 }
 
+Flusher* get_flusher(shard_id id) {
+	return _flushers[id];
+}
 
 /* flush the packets to it's storage */
 future<> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
 	flush_count++;
-	std::cout << "flus -> " << flush_count << " at " << engine().cpu_id() << "\n";
+	std::cout << "[flush] vol:" << volID <<". count:"<< flush_count;
+	std::cout << ". at core: " << engine().cpu_id() << "\n";
 
 	uint8_t last_hash[HASH_LEN];
 	int last_hash_len;
@@ -163,17 +217,18 @@ future<> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
  * 3. we need to handle if sequence number reset to 0
 */
 bool Flusher::ok_to_flush(uint32_t volID) {
-	return true;
 	auto packetsMap = _packets[volID];
-	auto it = packetsMap.cbegin();
+	auto it = packetsMap.begin();
 	auto prev = it->first;
 	++it;
-	while (it != packetsMap.cend()) {
+	auto i=1;
+	while (it != packetsMap.end() && i < FLUSH_SIZE) {
 		if (it->first != prev + 1) {
 			return false;
 		}
 		prev = it->first;
 		++it;
+		++i;
 	}
 	return true;
 }
@@ -281,7 +336,7 @@ void Flusher::get_last_hash(uint32_t volID, uint8_t *hash, int *hash_len, bool r
 	if (reply == NULL) {
 		// if we got null, we assume that redis connection is broken
 		// we create it again.
-		_meta_redis_conn = create_meta_redis_conn();
+		create_meta_redis_conn();
 		if (!retried) {
 			get_last_hash(volID, hash, hash_len, true);
 		}
