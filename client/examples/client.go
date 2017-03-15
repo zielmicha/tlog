@@ -52,6 +52,12 @@ func main() {
 				log.Printf("client %v died\n", idx)
 				return
 			}
+			tr, err := client.RecvOne()
+			if err != nil {
+				log.Printf("client %v failed to recv:%v\n", idx, err)
+			} else {
+				log.Printf("status=%v, seqs=%v\n", tr.Status, tr.Sequences)
+			}
 			clientReady <- idx
 		}(seq, idx)
 	}
