@@ -4,7 +4,13 @@ This is Nim version of tlog server.
 
 ### Dependencies
 
-For development you will need `redis-server` and `capnp` compiler:
+For building you need `yasm`:
+
+```
+apt-get install yasm
+```
+
+For development you will also need `redis-server` and `capnp` compiler:
 
 ```
 apt-get install redis-server capnproto

@@ -1,7 +1,7 @@
 version = "0.0.1"
 author = "Michal Zielinski"
 description = ""
-license = "none yet"
+license = "Apache"
 
 requires "reactor >= 0.3.99"
 requires "capnp >= 0.0.3"

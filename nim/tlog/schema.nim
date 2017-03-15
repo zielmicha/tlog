@@ -3,6 +3,10 @@ import capnp, capnp/gensupport, collections/iface
 # file: ../schema/tlog_schema.capnp
 
 type
+  TlogResponse* = ref object
+    status*: int8
+    sequences*: seq[uint64]
+
   TlogBlock* = ref object
     volumeId*: uint32
     sequence*: uint64
@@ -21,6 +25,12 @@ type
     prev*: string
 
 
+
+makeStructCoders(TlogResponse, [
+  (status, 0, 0, true)
+  ], [
+  (sequences, 0, PointerFlag.none, true)
+  ], [])
 
 makeStructCoders(TlogBlock, [
   (volumeId, 0, 0, true),
