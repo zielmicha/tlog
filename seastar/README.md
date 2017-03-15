@@ -28,13 +28,48 @@ export SEASTAR=YOUR_SEASTAR_DIR
 ./build.sh
 ```
 
+## Run in development environment
+
+This guide assuming user to use default options
+
+### options
+
+Tlog server options can be seen by executing `./main -h` and look at `App options` sections
+```
+$ ./main -h
+App options:
+  -h [ --help ]                         show help message
+  --port arg (=11211)                   tcp port
+  --flush_size arg (=25)                flush_size
+  --flush_time arg (=25)                flush_time (seconds)
+  --k arg (=4)                          K variable of erasure encoding
+  --m arg (=2)                          M variable of erasure encoding
+  --objstor_addr arg (=127.0.0.1)       objstor address
+  --objstor_port arg (=16379)           objstor first port
+  --priv_key arg (=my-secret-key)       private key
+
+```
+
+### start 1+K+M number of ardb server in localhost
+
+first server for metadata, it store `last hash` value of each volume ID. Listen in port `16379`.
+
+Other (6 == k+m == 4+2) servers listens from port 16380-16385 store the erasure encoded data
+
+### Start tlog server 
+
+```
+./main
+```
+### Use provided client library to send tlog data
+
+Client lib can be found in [client dir](https://github.com/g8os/tlog/tree/master/client).
+
+Usage example can be found in [examples dir](https://github.com/g8os/tlog/tree/master/client/examples)
+
 ## TODO
 
-- add options for objstor addr & port
-- add options to specify K & M value of erasure encoding (currently hardcoded to 4 & 2)
-- improve locking (if tlog server flush volume's tlog, it currently can't receive tlog 
-  for that volume)
+- add crc
 - add compression
 - add encryption
 - add proper logging
-- fix segmentation fault issue (run it with `./main -c 1`, it stil has bug, but less)
