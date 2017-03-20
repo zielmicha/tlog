@@ -1,0 +1,6 @@
+/nimenv.local
+nimcache/
+/data
+/nim.cfg
+/tlog/main
+/tlog/test_client
