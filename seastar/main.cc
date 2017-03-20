@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <vector>
 
+#include <isa-l/crc.h>
 
 #include "redis_conn.h"
 #include "flusher.h"
@@ -172,11 +173,28 @@ public:
 	}
 
 	future<> handle_packet(uint8_t *packet, output_stream<char>& out) {
-		// get volume ID
-		uint32_t vol_id;
-		uint64_t seq;
-		memcpy(&vol_id, packet + 24, 4);
-		memcpy(&seq, packet + 32, 8);
+		// TODO
+		// we do capnp decode twice now : here and when encoding before erasure encode.
+		// make it only once.
+		// except that it doesn't allocate any memory
+		auto apt = kj::ArrayPtr<kj::byte>(packet, BUF_SIZE);
+		kj::ArrayInputStream ais(apt);
+		::capnp::MallocMessageBuilder message;
+		readMessageCopy(ais, message);
+		auto reader = message.getRoot<TlogBlock>();
+
+		auto vol_id = reader.getVolumeId();
+		auto seq = reader.getSequence();
+
+		auto crc32 = crc32_ieee(0, reader.getData().begin(), reader.getData().size());
+		if (crc32 != reader.getCrc32()) {
+			free(packet);
+			flush_result fr;
+			fr.status = TLOG_MSG_CORRUPT;
+			std::cout << "crc check failed for seq=" << seq << ".vol_id=" << vol_id << "\n";
+			fr.sequences.push_back(seq);
+			return this->send_response(out, fr);
+		}
 
 		return smp::submit_to(vol_id % smp::count, [this, packet, vol_id, seq, &out] {
 				auto flusher = get_flusher(engine().cpu_id());

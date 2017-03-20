@@ -63,12 +63,13 @@ public:
 };
 
 enum tlog_status {
-	FLUSH_TIMEOUT_FAILED,
-	FLUSH_MAX_TLOGS_FAILED,	// flush (because of max tlogs) failed
-	FLUSH_TLOG_FAILED,		// tlog message failed to be received
-	FLUSH_NO = 0, 			// tlog message received, but no flush
-	FLUSH_MAX_TLOGS_OK,		// flush (because of max tlogs) OK
-	FLUSH_TIMEOUT_OK		// flush (because of timeout) OK
+	TLOG_MSG_CORRUPT = -4,			// tlog message corrupt (by crc check)
+	FLUSH_TIMEOUT_FAILED = -3,
+	FLUSH_MAX_TLOGS_FAILED = -2,	// flush (because of max tlogs) failed
+	FLUSH_TLOG_FAILED = -1,			// tlog message failed to be received
+	FLUSH_NO = 0, 					// tlog message received, but no flush
+	FLUSH_MAX_TLOGS_OK = 1,			// flush (because of max tlogs) OK
+	FLUSH_TIMEOUT_OK = 2			// flush (because of timeout) OK
 };
 
 struct flush_result {

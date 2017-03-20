@@ -33,6 +33,11 @@ func main() {
 		clientReady <- i
 	}
 	data := make([]byte, 4096*4)
+	for i := 0; i < (4096 * 4); i++ {
+		data[i] = 'a'
+	}
+	data[0] = 'b'
+	data[1] = 'c'
 
 	// produce the data
 	go func() {
@@ -47,7 +52,7 @@ func main() {
 			client := clients[int(j)%numClient]
 
 			log.Printf("j=%v\n", j)
-			err := client.Send(volID, j, uint32(j), j, j, data)
+			err := client.Send(volID, j, j, j, data)
 			if err != nil {
 				log.Printf("client %v died\n", idx)
 				return

@@ -1,5 +1,9 @@
 package client
 
+// #include <isa-l/crc.h>
+// #cgo LDFLAGS: -lisal
+import "C"
+
 import (
 	"bufio"
 	"errors"
@@ -9,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 )
 
 var (
@@ -148,14 +153,16 @@ func createConn(addr string) (*net.TCPConn, error) {
 // - failed to send all tlog
 // in case of errors, client is not in valid state,
 // shouldn't be used anymore
-func (c *Client) Send(volID uint32, seq uint64, crc32 uint32,
+func (c *Client) Send(volID uint32, seq uint64,
 	lba, timestamp uint64, data []byte) error {
 
 	if len(data) != 1024*16 {
 		return ErrInvalidDataLen
 	}
 
-	b, err := buildCapnp(volID, seq, crc32, lba, timestamp, data)
+	crc := C.crc32_ieee(0, (*C.uchar)(unsafe.Pointer(&data[0])), (C.uint64_t)(len(data)))
+
+	b, err := buildCapnp(volID, seq, uint32(crc), lba, timestamp, data)
 	if err != nil {
 		return err
 	}
