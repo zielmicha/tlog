@@ -1,25 +1,29 @@
 #include "redis_conn.h"
 
+#include <sstream>
+
+const auto endline = std::string("\r\n");
+
 /**
- * this is very naive & inefficient string formatting.
- * TODO : optimize it!
+ * format a redis SET command
  */
 std::string format_set(const uint8_t *key, int key_len, const uint8_t *val, int val_len) {
+	std::stringstream ss;
 	// prefix
-	auto str = std::string("*3\r\n");
+	ss << "*3" << endline;
 
 	// set command
-	str += std::string("$3\r\nset\r\n");
+	ss << "$3" << endline << "set" << endline;
 
 	// key
-	str += std::string("$") + std::to_string(key_len) + std::string("\r\n");
-	str += std::string((const char *)key, key_len) + std::string("\r\n");
+	ss << "$" << key_len  << endline;
+	ss << std::string((const char *)key, key_len) + endline;
 
 	// val
-	str += std::string("$") + std::to_string(val_len) + std::string("\r\n");
-	str += std::string((const char *)val, val_len) + std::string("\r\n");
+	ss << "$" << val_len << endline;
+	ss << std::string((const char *)val, val_len) << endline;
 
-	return str;
+	return ss.str();
 }
 
 redis_conn::redis_conn(connected_socket&& fd)
