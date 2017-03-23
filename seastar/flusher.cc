@@ -13,6 +13,7 @@
 #include <hiredis/hiredis.h>
 #include <blake2.h>
 #include <isa-l/erasure_code.h>
+#include <snappy.h>
 
 #include "redis_conn.h"
 
@@ -212,23 +213,27 @@ future<flush_result> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
 	kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 	writeMessage(aos, msg);
 	kj::ArrayPtr<kj::byte> bs = aos.getArray();
+
+	// compress it
+	std::string compressed;
+	snappy::Compress((const char *) bs.begin(), bs.size(), &compressed);
 	
 	// erasure encoding
 	Erasurer er(_k, _m); // TODO : check if we can reuse this object
-	int chunksize = er.chunksize(bs.size());
+	int chunksize = er.chunksize(compressed.length());
 
 	// build the inputs for erasure coding
 	unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * _k);
 	for (int i=0; i < _k; i++) {
-		int to_copy = i == _k -1 ? bs.size() - (chunksize * (_k-1)) : chunksize;
+		int to_copy = i == _k -1 ? compressed.length() - (chunksize * (_k-1)) : chunksize;
 		if (i < _k-1) {
 			// we can simply use pointer
-			inputs[i] =  bs.begin() + (chunksize * i);
+			inputs[i] =  (unsigned char *) compressed.c_str() + (chunksize * i);
 		} else {
 			// we need to do memcpy here because
 			// we might need to add padding to last part
 			inputs[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
-			memcpy(inputs[i], bs.begin() + (chunksize * i), to_copy);
+			memcpy(inputs[i], compressed.c_str() + (chunksize * i), to_copy);
 		}
 	}
 	
@@ -242,7 +247,7 @@ future<flush_result> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
 	int hash_len = 32;
 	
 	//uint8_t hash[bs.size()];
-	uint8_t *hash = hash_gen(volID, bs.begin(), bs.size(),
+	uint8_t *hash = hash_gen(volID, (uint8_t *) compressed.c_str(), compressed.length(),
 			last_hash, last_hash_len);
 		
 	return storeEncodedAgg(volID, hash, hash_len, inputs, coding,
