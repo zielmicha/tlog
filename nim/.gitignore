@@ -4,3 +4,5 @@ nimcache/
 /nim.cfg
 /tlog/main
 /tlog/test_client
+/.gdb_history
+/.nimenv
