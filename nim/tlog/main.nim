@@ -13,7 +13,6 @@ type
 let hasher = newSha512Pool()
 var volumes = initTable[uint32, VolumeHandler]()
 var coreState {.threadvar.}: CoreState
-let mloop = newMultiLoop()
 
 proc flush(volume: VolumeHandler): Future[void] {.async.} =
   if volume.lastHash == nil:
@@ -54,10 +53,14 @@ proc handleMsgProc(blockMsg: TlogBlock): auto =
 
 proc handleClient(conn: TcpConnection) {.async.} =
   while true:
-    let segments = await readMultisegment(conn.input)
+    let segmentsR = tryAwait readMultisegment(conn.input)
+    if segmentsR.isError and segmentsR.error.getOriginal == JustClose: # eof?
+      break
+
+    let segments = await segmentsR
     let blockMsg = capnp.newUnpacker(segments).unpackPointer(0, TlogBlock)
     echo "recv ", blockMsg.pprint
-    mloop.execOnThread((blockMsg.volumeId.int mod mloop.threadCount), handleMsgProc(blockMsg))
+    runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(blockMsg))
 
 proc connectToRedis() {.async.} =
   for i in 1..10:
@@ -68,19 +71,13 @@ proc loopMain() {.async.} =
   echo "init"
   coreState = CoreState(dbConnections: @[])
   await connectToRedis()
-  let server = await createTcpServer(11211, reusePort=true) # TODO(perf): multicore
+  let server = await createTcpServer(11211, reusePort=true)
   asyncFor conn in server.incomingConnections:
     echo "incoming connection ", conn.getPeerAddr
     handleClient(conn).ignore
 
-proc main*() {.async.} =
-  proc loop() {.thread.} =
-    loopMain().ignore
-
-  mloop.execOnAllThreads(loop)
-
-  while true:
-    os.sleep(100000)
+proc main*() =
+  startMultiloop(mainProc=loopMain)
 
 when isMainModule:
-  main().runMain
+  main()
