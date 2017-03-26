@@ -1,4 +1,4 @@
-import reactor, capnp, collections/pprint, collections, reactor/redis, times, isa/erasure_code, isa/hash, securehash, reactor/threading, os
+import reactor, capnp, collections/pprint, collections, reactor/redis, times, isa/erasure_code, isa/hash, securehash, reactor/threading, os, snappy
 import tlog/schema, tlog/util
 
 type
@@ -31,7 +31,8 @@ proc flush(volume: VolumeHandler): Future[void] {.async.} =
     totalChunks = 10
     maxLost = 3
 
-  let chunks = encodeString(aggData, totalChunks, maxLost)
+  let aggDataCompressed = snappy.compress(aggData)
+  let chunks = encodeString(aggDataCompressed, totalChunks, maxLost)
   var waitFor: seq[Future[int64]] = @[]
   for i in 0..<totalChunks: # store in parallel
     waitFor.add coreState.dbConnections[i].hset("volume-data", aggHash, chunks[i])
