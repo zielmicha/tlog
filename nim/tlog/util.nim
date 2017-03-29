@@ -21,3 +21,8 @@ proc readMultisegment*(input: ByteInput): Future[seq[string]] {.async.} =
 
   segments.shallow # pass this seq by reference
   return segments
+
+proc writeMultisegment*(output: ByteOutput, data: string) {.async.} =
+  await output.writeItem(uint32(0), littleEndian)
+  await output.writeItem(uint32(data.len div 8), littleEndian)
+  await output.write(data)
