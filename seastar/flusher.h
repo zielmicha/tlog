@@ -111,6 +111,12 @@ private:
 
 	/* last time we do flushing per volume id*/
 	std::map<uint32_t, time_t> _last_flush_time;
+
+	/* encryption input vector */
+	uint8_t _enc_iv[16];
+
+	/* encryption key */
+	uint8_t _enc_key[256];
 public:
 	Flusher() {
 	}
