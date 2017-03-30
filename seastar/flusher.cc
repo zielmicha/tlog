@@ -14,6 +14,7 @@
 #include <blake2.h>
 #include <isa-l/erasure_code.h>
 #include <snappy.h>
+#include <isa-l_crypto/aes_cbc.h>
 
 #include "redis_conn.h"
 
@@ -46,6 +47,8 @@ Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_ke
 {
 	_redis_conns.reserve(_k + _m + 1);
 	_redis_conns.resize(_k + _m + 1);
+	std::memset(_enc_iv, '0', 16);
+	std::memset(_enc_key, '0', 256);
 	
 	create_meta_redis_conn();
 }
@@ -217,23 +220,32 @@ future<flush_result> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
 	// compress it
 	std::string compressed;
 	snappy::Compress((const char *) bs.begin(), bs.size(), &compressed);
+
+	// encrypt
+	// - align the compressed to 16 bytes boundary
+	// - allocate the output (same size?)
+	compressed.resize(compressed.length() + 16 - (compressed.length() % 16));
+
+	unsigned char *encrypted = (unsigned char *) malloc (sizeof(unsigned char) * compressed.length());
+	int enc_len = aes_cbc_enc_256((void *) compressed.c_str(), _enc_iv, _enc_key, encrypted, compressed.length());
+
 	
 	// erasure encoding
 	Erasurer er(_k, _m); // TODO : check if we can reuse this object
-	int chunksize = er.chunksize(compressed.length());
+	int chunksize = er.chunksize(enc_len);
 
 	// build the inputs for erasure coding
 	unsigned char **inputs = (unsigned char **) malloc(sizeof(unsigned char *) * _k);
 	for (int i=0; i < _k; i++) {
-		int to_copy = i == _k -1 ? compressed.length() - (chunksize * (_k-1)) : chunksize;
+		int to_copy = i == _k -1 ? enc_len - (chunksize * (_k-1)) : chunksize;
 		if (i < _k-1) {
 			// we can simply use pointer
-			inputs[i] =  (unsigned char *) compressed.c_str() + (chunksize * i);
+			inputs[i] =  (unsigned char *) encrypted + (chunksize * i);
 		} else {
 			// we need to do memcpy here because
 			// we might need to add padding to last part
 			inputs[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
-			memcpy(inputs[i], compressed.c_str() + (chunksize * i), to_copy);
+			memcpy(inputs[i], encrypted + (chunksize * i), to_copy);
 		}
 	}
 	
@@ -247,14 +259,14 @@ future<flush_result> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
 	int hash_len = 32;
 	
 	//uint8_t hash[bs.size()];
-	uint8_t *hash = hash_gen(volID, (uint8_t *) compressed.c_str(), compressed.length(),
+	uint8_t *hash = hash_gen(volID, (uint8_t *) encrypted, enc_len,
 			last_hash, last_hash_len);
 		
 	return storeEncodedAgg(volID, hash, hash_len, inputs, coding,
-					chunksize).then([this, hash, inputs, coding, sequences] (auto ok){
+					chunksize).then([this, hash, inputs, coding, sequences, encrypted] (auto ok){
 				
 						free(hash);
-					
+						free(encrypted);
 						// cleanup erasure coding data
 						free(inputs[_k-1]);
 						free(inputs);
