@@ -91,7 +91,4 @@ $SEASTAR/tools/dpdk-setup.sh
 
 ## TODO
 
-- add crc
-- add compression
-- add encryption
 - add proper logging
