@@ -24,8 +24,16 @@ export SEASTAR=YOUR_SEASTAR_DIR
 
 ## Build tlog server
 
+### install required packages
+
 ```
-./build.sh
+bash install_dependencies.sh
+```
+
+### build it
+
+```
+make
 ```
 
 ## Run in development environment
@@ -66,6 +74,20 @@ Other (6 == k+m == 4+2) servers listens from port 16380-16385 store the erasure 
 Client lib can be found in [client dir](https://github.com/g8os/tlog/tree/master/client).
 
 Usage example can be found in [examples dir](https://github.com/g8os/tlog/tree/master/client/examples)
+
+## Run on top of dpdk stack
+
+### Bind the ethernet device to IGB UIO module.
+```
+$SEASTAR/tools/dpdk-setup.sh
+```
+
+### run using dpdk statck
+```
+./main --network-stack native --host-ipv4-addr=192.168.0.102 --gw-ipv4-addr=192.168.0.1 --dhcp=0  --dpdk-pmd
+```
+
+###
 
 ## TODO
 
