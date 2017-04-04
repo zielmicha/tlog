@@ -15,6 +15,7 @@
 #include <isa-l/erasure_code.h>
 #include <snappy.h>
 #include <isa-l_crypto/aes_cbc.h>
+#include <isa-l_crypto/aes_keyexp.h>
 
 #include "redis_conn.h"
 
@@ -48,7 +49,8 @@ Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_ke
 	_redis_conns.reserve(_k + _m + 1);
 	_redis_conns.resize(_k + _m + 1);
 	std::memset(_enc_iv, '0', 16);
-	std::memset(_enc_key, '0', 256);
+	uint8_t dec_key[256];
+	aes_keyexp_256((uint8_t *)priv_key.c_str(), _enc_key, dec_key);
 	
 	create_meta_redis_conn();
 }

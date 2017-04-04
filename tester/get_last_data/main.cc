@@ -8,6 +8,7 @@
 #include <snappy.h>
 #include <cstring>
 #include <isa-l_crypto/aes_cbc.h>
+#include <isa-l_crypto/aes_keyexp.h>
 
 #include "tlog_schema.capnp.h"
 #include <capnp/message.h>
@@ -157,9 +158,12 @@ void test_encoded(unsigned char *hash, int hash_len) {
 	uint8_t iv[16];
 	std::memset(iv, '0', 16);
 	uint8_t enc_key[256];
-	std::memset(enc_key, '0', 256);
+	uint8_t dec_key[256];
+	auto priv_key = std::string("12345678901234567890123456789012");
+	aes_keyexp_256((uint8_t *) priv_key.c_str(), enc_key, dec_key);
+	
 	unsigned char *unencrypted = (unsigned char *) malloc(sizeof (unsigned char) * data_len * 4);
-	aes_cbc_dec_256(encoded, iv, enc_key, unencrypted, data_len * 4);
+	aes_cbc_dec_256(encoded, iv, dec_key, unencrypted, data_len * 4);
 
 	// uncompress
 	std::string uncompressed;

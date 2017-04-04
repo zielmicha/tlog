@@ -248,7 +248,7 @@ int main(int ac, char** av) {
 		("m", bpo::value<int>()->default_value(2), "M variable of erasure encoding")
 		("objstor_addr", bpo::value<std::string>()->default_value("127.0.0.1"), "objstor address")
 		("objstor_port", bpo::value<int>()->default_value(16379), "objstor first port")
-		("priv_key", bpo::value<std::string>()->default_value("my-secret-key"), "private key")
+		("priv_key", bpo::value<std::string>()->default_value("12345678901234567890123456789012"), "private key")
 
 		;
     return app.run_deprecated(ac, av, [&] {
