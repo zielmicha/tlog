@@ -159,7 +159,7 @@ private:
 	future<bool> storeEncodedAgg(uint64_t vol_id, const char *hash, int hash_len,
 			const char **data, const char **coding, int chunksize);
 
-	uint8_t* hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len,
+	int hash_gen(uint64_t vol_id, uint8_t *new_hash, uint8_t *data, uint8_t data_len,
 			uint8_t *key, int key_len);
 
 	void get_last_hash(uint32_t volID, uint8_t *hash, int *hash_len, bool retried = false);
