@@ -182,9 +182,8 @@ public:
 		// check crc of the packet
 		auto crc32 = crc32_ieee(0, reader.getData().begin(), reader.getData().size());
 		if (crc32 != reader.getCrc32()) {
-			flush_result fr;
-			fr.status = TLOG_MSG_CORRUPT;
-			fr.sequences.push_back(reader.getSequence());
+			flush_result *fr = new flush_result(TLOG_MSG_CORRUPT);
+			fr->sequences.push_back(reader.getSequence());
 			return this->send_response(out, fr);
 		}
 
@@ -201,20 +200,22 @@ public:
 	}
 
 private:
-	future<> send_response(output_stream<char>& out, flush_result& fr) {
+	future<> send_response(output_stream<char>& out, flush_result* fr) {
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogResponse>();
 		
-		agg.setStatus(fr.status);
-		auto sequences = agg.initSequences(fr.sequences.size());
-		for (unsigned i=0; i < fr.sequences.size(); i++) {
-			sequences.set(i, fr.sequences[i]);
+		agg.setStatus(fr->status);
+		auto sequences = agg.initSequences(fr->sequences.size());
+		for (unsigned i=0; i < fr->sequences.size(); i++) {
+			sequences.set(i, fr->sequences[i]);
 		}
 
-		kj::byte outbuf[500]; // TODO : find the optimal buffer size
+		kj::byte outbuf[fr->approx_size() + 30];
 		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 		writeMessage(aos, msg);
 		kj::ArrayPtr<kj::byte> bs = aos.getArray();
+
+		delete fr;
 
 		std::string prefix = std::to_string(bs.size()) + "\r\n";
 		return out.write(prefix).then([&out, bs] {

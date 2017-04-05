@@ -101,19 +101,18 @@ void Flusher::create_meta_redis_conn() {
  * check if need and able to flush to certain volume.
  * call the flush if needed.
 */
-future<flush_result> Flusher::check_do_flush(uint32_t vol_id) {
+future<flush_result*> Flusher::check_do_flush(uint32_t vol_id) {
 	std::queue<tlog_block *> flush_q;
-	flush_result fr;
-	fr.status = FLUSH_NO;
+	flush_result *fr = new flush_result(FLUSH_NO);
 	
 	if (!ok_to_flush(vol_id, _flush_size)) {
-		return make_ready_future<flush_result>(fr);
+		return make_ready_future<flush_result*>(fr);
 	}
 	if (_packets[vol_id].size() < (unsigned)_flush_size) {
-		return make_ready_future<flush_result>(fr);
+		return make_ready_future<flush_result*>(fr);
 	}
 	if (pick_to_flush(vol_id, &flush_q, _flush_size) == false) {
-		return make_ready_future<flush_result>(fr);
+		return make_ready_future<flush_result*>(fr);
 	}
 	return flush(vol_id, flush_q);
 }
@@ -176,7 +175,7 @@ Flusher* get_flusher(shard_id id) {
 }
 
 /* flush the packets to it's storage */
-future<flush_result> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& pq) {
+future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& pq) {
 	flush_count++;
 	std::cout << "[flush]vol:" << volID <<".count:"<< flush_count;
 	std::cout << ".size:" << pq.size() << ".core:" << engine().cpu_id() << "\n";
@@ -275,11 +274,10 @@ future<flush_result> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& pq
 						for(int i=0; i < _m; i++) {
 							free(coding[i]);
 						}
-						flush_result fr;
-						fr.status = ok? FLUSH_MAX_TLOGS_OK : FLUSH_MAX_TLOGS_FAILED;
-						fr.sequences = sequences;
+						flush_result *fr = new flush_result(ok? FLUSH_MAX_TLOGS_OK : FLUSH_MAX_TLOGS_FAILED);
+						fr->sequences = sequences;
 						free(coding);
-						return make_ready_future<flush_result>(fr);
+						return make_ready_future<flush_result*>(fr);
 				});
 }
 	

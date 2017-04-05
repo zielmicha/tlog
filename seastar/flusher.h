@@ -76,6 +76,18 @@ enum tlog_status {
 struct flush_result {
 	int status;
 	std::vector<uint64_t> sequences;
+public:
+	flush_result(int new_status) {
+		status = new_status;
+	}
+	~flush_result() {
+		sequences.resize(0);
+	}
+
+	/** approximate size of this object */
+	int approx_size() {
+		return sizeof(int) + (sizeof(uint64_t) * sequences.size());
+	}
 };
 
 class Flusher {
@@ -126,7 +138,7 @@ public:
 
 	void add_packet(tlog_block *tb);
 
-	future<flush_result> check_do_flush(uint32_t vol_id);
+	future<flush_result*> check_do_flush(uint32_t vol_id);
 	
 	future<> periodic_flush();
 
@@ -140,7 +152,7 @@ private:
 
 	bool pick_to_flush(uint64_t vol_id, std::queue<tlog_block *> *q, int flush_size);
 
-	future<flush_result> flush(uint32_t volID, std::queue<tlog_block *>& pq);
+	future<flush_result*> flush(uint32_t volID, std::queue<tlog_block *>& pq);
 
 	bool ok_to_flush(uint32_t vol_id, int flush_size);
 
