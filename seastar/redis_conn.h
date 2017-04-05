@@ -10,10 +10,15 @@ private:
 	connected_socket _fd;
 	output_stream<char> _out;
 	input_stream<char> _in;
+	socket_address _sa;
+	int _idx;
+	bool _connected;
 public:
-	redis_conn(connected_socket&& fd);
+	redis_conn(socket_address sa, int idx);
 	future<bool> set(const std::string& key, const std::string& val);
 	future<bool> set(const char *key, int key_len, const char *val, int val_len);
+private:
+	future<> reconnect(int retry_quota=0);
 };
 
 #endif

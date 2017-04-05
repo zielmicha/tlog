@@ -145,7 +145,7 @@ public:
 	void post_init();
 
 private:
-	future<> init_redis_conn(int idx);
+	void init_redis_conn(int idx, int retry_quota=0);
 	void init_redis_conns();
 	
 	void create_meta_redis_conn();

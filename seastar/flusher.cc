@@ -62,27 +62,24 @@ Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_ke
 void Flusher::post_init() {
 	_flushers[engine().cpu_id()] = this;
 	init_redis_conns();
+	std::cout << "post init finished\n";
 }
 
 void Flusher::add_packet(tlog_block *tb){
 	this->_packets[tb->_vol_id][tb->_sequence] = tb;
 }
 
-future<> Flusher::init_redis_conn(int idx) {
+void Flusher::init_redis_conn(int idx, int retry_quota) {
 	auto ipaddr = make_ipv4_address(ipv4_addr(_objstor_addr,_objstor_port + idx));
-	
-	return connect(ipaddr).then([this, idx] (connected_socket s) {
-			auto conn = new redis_conn(std::move(s));
-			_redis_conns[idx] = std::move(conn);
-			return make_ready_future<>();
-		});
+
+	_redis_conns[idx] = new redis_conn(ipaddr, idx);
 }
 
 void Flusher::init_redis_conns() {
 	auto num = 1 + _k + _m;
 		
 	for(int i=0; i < num; i++) {
-		init_redis_conn(i);
+		init_redis_conn(i, 2);
 	}
 }
 
@@ -371,10 +368,6 @@ future<bool> Flusher::storeEncodedAgg(uint64_t vol_id, const char *hash, int has
 			for (unsigned i=0; i < vr.size(); i++) {
 				if (!vr[i]) {
 					is_ok = false;
-					// sleep for a while before re-creating the connection
-            		sleep(std::chrono::seconds(5)).then([this, i] {
-							init_redis_conn(i);
-						});
 				}
 			}
 			return make_ready_future<bool>(is_ok);
