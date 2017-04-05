@@ -201,7 +201,7 @@ public:
 	}
 
 private:
-	future<> send_response(output_stream<char>& out, flush_result fr) {
+	future<> send_response(output_stream<char>& out, flush_result& fr) {
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogResponse>();
 		

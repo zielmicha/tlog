@@ -176,7 +176,7 @@ Flusher* get_flusher(shard_id id) {
 }
 
 /* flush the packets to it's storage */
-future<flush_result> Flusher::flush(uint32_t volID, std::queue<tlog_block *> pq) {
+future<flush_result> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& pq) {
 	flush_count++;
 	std::cout << "[flush]vol:" << volID <<".count:"<< flush_count;
 	std::cout << ".size:" << pq.size() << ".core:" << engine().cpu_id() << "\n";
