@@ -34,7 +34,7 @@ static const int BUF_SIZE = 16472; /* size of the message we receive from client
  * TODO : find the correct number. It currently based only
  * on my own guest.
  * */
-static const int CAPNP_OUTBUF_EXTRA = 300;
+static const int CAPNP_OUTBUF_EXTRA = 200;
 
 Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, 
 		int flush_size, int flush_timeout, int k, int m)
@@ -152,7 +152,6 @@ future<> Flusher::periodic_flush() {
 				});
 	}).then([] {
 			return make_ready_future<>();
-            //return sleep(std::chrono::seconds(2));
 		});
 }
 
@@ -174,12 +173,17 @@ Flusher* get_flusher(shard_id id) {
 	return _flushers[id];
 }
 
+static size_t capnp_outbuf_size(TlogAggregation::Builder& agg) {
+	return (agg.getSize() * BUF_SIZE) + CAPNP_OUTBUF_EXTRA;
+}
+
 /* flush the packets to it's storage */
 future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& pq) {
 	flush_count++;
 	std::cout << "[flush]vol:" << volID <<".count:"<< flush_count;
 	std::cout << ".size:" << pq.size() << ".core:" << engine().cpu_id() << "\n";
 
+	// remember last time we flush
 	_last_flush_time[volID] = time(0);
 
 	uint8_t last_hash[HASH_LEN];
@@ -212,8 +216,7 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	}
 
 	// encode it
-	int outbufSize = (agg.getSize() * BUF_SIZE) + CAPNP_OUTBUF_EXTRA;
-	kj::byte outbuf[outbufSize];
+	kj::byte outbuf[capnp_outbuf_size(agg)];
 	kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 	writeMessage(aos, msg);
 	kj::ArrayPtr<kj::byte> bs = aos.getArray();
@@ -257,13 +260,10 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	}
 	er.encode(inputs, coding, chunksize);
 	
-	int hash_len = 32;
-	
-	//uint8_t hash[bs.size()];
 	uint8_t *hash = hash_gen(volID, (uint8_t *) encrypted, enc_len,
 			last_hash, last_hash_len);
 		
-	return storeEncodedAgg(volID, hash, hash_len, inputs, coding,
+	return storeEncodedAgg(volID, (const char *)hash, last_hash_len, (const char **)inputs, (const char **)coding,
 					chunksize).then([this, hash, inputs, coding, sequences, encrypted] (auto ok){
 				
 						free(hash);
@@ -305,8 +305,8 @@ bool Flusher::ok_to_flush(uint32_t vol_id, int flush_size) {
 }
 	
 
-future<bool> Flusher::storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_len,
-		unsigned char **data, unsigned char **coding, int chunksize) {
+future<bool> Flusher::storeEncodedAgg(uint64_t vol_id, const char *hash, int hash_len,
+		const char **data, const char **coding, int chunksize) {
 
 	semaphore *finished = new semaphore(0);
 	std::vector<bool> *ok_vec = new std::vector<bool>(_k + _m + 1);
@@ -336,8 +336,7 @@ future<bool> Flusher::storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_l
 	
 	auto rc = _redis_conns[0];
 	
-	rc->set((uint8_t *) last.c_str(), last.length(), 
-			(unsigned char *) hash, hash_len).then([this, finished, &vr] (auto ok){
+	rc->set(last.c_str(), last.length(), hash, hash_len).then([this, finished, &vr] (auto ok){
 				vr[0] = ok;
 			}).finally([finished] {
 				finished->signal();
