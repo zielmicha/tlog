@@ -64,8 +64,8 @@ void Flusher::post_init() {
 	init_redis_conns();
 }
 
-void Flusher::add_packet(uint8_t *packet, uint32_t vol_id, uint64_t seq){
-	this->_packets[vol_id][seq] = packet;
+void Flusher::add_packet(tlog_block *tb){
+	this->_packets[tb->_vol_id][tb->_sequence] = tb;
 }
 
 future<> Flusher::init_redis_conn(int idx) {
@@ -102,7 +102,7 @@ void Flusher::create_meta_redis_conn() {
  * call the flush if needed.
 */
 future<flush_result> Flusher::check_do_flush(uint32_t vol_id) {
-	std::queue<uint8_t *> flush_q;
+	std::queue<tlog_block *> flush_q;
 	flush_result fr;
 	fr.status = FLUSH_NO;
 	
@@ -143,7 +143,7 @@ future<> Flusher::periodic_flush() {
 			return make_ready_future<>();
 		}
 
-		std::queue<uint8_t *> flush_q;
+		std::queue<tlog_block *> flush_q;
 		if (pick_to_flush(vol_id, &flush_q, _packets[vol_id].size()) == false) {
 			return make_ready_future<>();
 		}
@@ -162,7 +162,7 @@ future<> Flusher::periodic_flush() {
  * It must be called under flush & sem lock
 */
 
-bool Flusher::pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q, int flush_size) {
+bool Flusher::pick_to_flush(uint64_t vol_id, std::queue<tlog_block *> *q, int flush_size) {
 	auto it = _packets[vol_id].begin();
 	for (int i=0; i  < flush_size && it != _packets[vol_id].end(); i++) {
 		q->push(it->second);
@@ -176,10 +176,10 @@ Flusher* get_flusher(shard_id id) {
 }
 
 /* flush the packets to it's storage */
-future<flush_result> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
+future<flush_result> Flusher::flush(uint32_t volID, std::queue<tlog_block *> pq) {
 	flush_count++;
-	std::cout << "[flush] vol:" << volID <<".count:"<< flush_count;
-	std::cout << ".flush_size:" << pq.size() << ".at core:" << engine().cpu_id() << "\n";
+	std::cout << "[flush]vol:" << volID <<".count:"<< flush_count;
+	std::cout << ".size:" << pq.size() << ".core:" << engine().cpu_id() << "\n";
 
 	_last_flush_time[volID] = time(0);
 
@@ -205,11 +205,11 @@ future<flush_result> Flusher::flush(uint32_t volID, std::queue<uint8_t *> pq) {
 	std::vector<uint64_t> sequences;
 	for (int i=0; !pq.empty(); i++) {
 		auto block = blocks[i];
-		auto packet = pq.front();
+		tlog_block *tb = pq.front();
 		pq.pop();
-		encodeBlock(packet, BUF_SIZE, &block);
+		encodeBlock(tb, &block);
 		sequences.push_back(block.getSequence());
-		free(packet);
+		delete tb;
 	}
 
 	// encode it
@@ -373,18 +373,14 @@ future<bool> Flusher::storeEncodedAgg(uint64_t vol_id, uint8_t *hash, int hash_l
 
 
 	
-void Flusher::encodeBlock(uint8_t *encoded, int len, TlogBlock::Builder* builder) {
-		auto apt = kj::ArrayPtr<kj::byte>(encoded, len);
-		kj::ArrayInputStream ais(apt);
-		::capnp::MallocMessageBuilder message;
-		readMessageCopy(ais, message);
-		auto reader = message.getRoot<TlogBlock>();
-
-		builder->setVolumeId(reader.getVolumeId());
-		builder->setSequence(reader.getSequence());
-		builder->setSize(reader.getSize());
-		builder->setCrc32(reader.getCrc32());
-		builder->setData(reader.getData());
+void Flusher::encodeBlock(tlog_block *tb, TlogBlock::Builder* builder) {
+		builder->setVolumeId(tb->_vol_id);
+		builder->setSequence(tb->_sequence);
+		builder->setLba(tb->_lba);
+		builder->setSize(tb->_size);
+		builder->setCrc32(tb->_crc);
+		builder->setData(capnp::Data::Reader(tb->_data, tb->_size));
+		builder->setTimestamp(tb->_timestamp);
 	}
 
 uint8_t* Flusher::hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len,

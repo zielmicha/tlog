@@ -16,6 +16,7 @@
 
 #include "redis_conn.h"
 #include "flusher.h"
+#include "tlog_block.h"
 
 #define PLATFORM "seastar"
 #define VERSION "v1.0"
@@ -151,15 +152,12 @@ public:
 	 */
 	future<> handle(input_stream<char>& in, output_stream<char>& out) {
     	return repeat([this, &out, &in] {
-			// this malloc will be freed in 'flush'
-			uint8_t *packet = (uint8_t *) malloc(BUF_SIZE);
-        	return in.read_exactly(BUF_SIZE).then( [this, &out, packet] (temporary_buffer<char> buf) {
+        	return in.read_exactly(BUF_SIZE).then( [this, &out] (temporary_buffer<char> buf) {
 				// Check if we receive data with expected size.
 				// Unexpected size indicated broken client/connection,
 				// we close it for simplicity.
             	if (buf && buf.size() == BUF_SIZE) {
-					std::memcpy(packet, buf.get(), buf.size());
-					return handle_packet(packet, out).then([]{
+					return handle_packet(std::move(buf), out).then([]{
 						return make_ready_future<stop_iteration>(stop_iteration::no);
 					});
             	} else {
@@ -172,34 +170,31 @@ public:
 
 	}
 
-	future<> handle_packet(uint8_t *packet, output_stream<char>& out) {
-		// TODO
-		// we do capnp decode twice now : here and when encoding before erasure encode.
-		// make it only once.
-		// except that it doesn't allocate any memory
-		auto apt = kj::ArrayPtr<kj::byte>(packet, BUF_SIZE);
+	future<> handle_packet(temporary_buffer<char> buf, output_stream<char>& out) {
+		// decode the message
+		auto apt = kj::ArrayPtr<kj::byte>((unsigned char *) buf.begin(), buf.size());
 		kj::ArrayInputStream ais(apt);
 		::capnp::MallocMessageBuilder message;
 		readMessageCopy(ais, message);
 		auto reader = message.getRoot<TlogBlock>();
 
-		auto vol_id = reader.getVolumeId();
-		auto seq = reader.getSequence();
 
+		// check crc of the packet
 		auto crc32 = crc32_ieee(0, reader.getData().begin(), reader.getData().size());
 		if (crc32 != reader.getCrc32()) {
-			free(packet);
 			flush_result fr;
 			fr.status = TLOG_MSG_CORRUPT;
-			std::cout << "crc check failed for seq=" << seq << ".vol_id=" << vol_id << "\n";
-			fr.sequences.push_back(seq);
+			fr.sequences.push_back(reader.getSequence());
 			return this->send_response(out, fr);
 		}
 
-		return smp::submit_to(vol_id % smp::count, [this, packet, vol_id, seq, &out] {
+		auto tb = new tlog_block(reader.getVolumeId(), reader.getSequence(), reader.getLba(), reader.getSize(),
+				reader.getCrc32(), reader.getData().begin(), reader.getTimestamp());
+
+		return smp::submit_to(tb->_vol_id % smp::count, [this, tb, &out] {
 				auto flusher = get_flusher(engine().cpu_id());
-				flusher->add_packet(packet, vol_id, seq);
-				return flusher->check_do_flush(vol_id);
+				flusher->add_packet(tb);
+				return flusher->check_do_flush(tb->_vol_id);
 		}).then([this, &out] (auto fr) {
 			return this->send_response(out, fr);
 		});

@@ -19,6 +19,7 @@
 #include <blake2.h>
 #include <hiredis/hiredis.h>
 
+#include "tlog_block.h"
 #include "redis_conn.h"
 
 /* Erasure encoder */
@@ -107,7 +108,7 @@ private:
 	std::vector<redis_conn *> _redis_conns;
 
 	/* packets cache by volume id*/
-	std::map<uint32_t, std::map<uint64_t, uint8_t *>> _packets;
+	std::map<uint32_t, std::map<uint64_t, tlog_block *>> _packets;
 
 	/* last time we do flushing per volume id*/
 	std::map<uint32_t, time_t> _last_flush_time;
@@ -122,7 +123,7 @@ public:
 	}
 	Flusher(std::string objstor_addr, int objstor_port, std::string priv_key, 
 			int flush_size, int flush_timeout, int k, int m);
-	void add_packet(uint8_t *packet, uint32_t vol_id, uint64_t seq);
+	void add_packet(tlog_block *tb);
 
 	future<flush_result> check_do_flush(uint32_t vol_id);
 	
@@ -136,9 +137,9 @@ private:
 	
 	void create_meta_redis_conn();
 
-	bool pick_to_flush(uint64_t vol_id, std::queue<uint8_t *> *q, int flush_size);
+	bool pick_to_flush(uint64_t vol_id, std::queue<tlog_block *> *q, int flush_size);
 
-	future<flush_result> flush(uint32_t volID, std::queue<uint8_t *> pq);
+	future<flush_result> flush(uint32_t volID, std::queue<tlog_block *> pq);
 
 	bool ok_to_flush(uint32_t vol_id, int flush_size);
 
@@ -150,7 +151,7 @@ private:
 
 	void get_last_hash(uint32_t volID, uint8_t *hash, int *hash_len, bool retried = false);
 
-	void encodeBlock(uint8_t *encoded, int len, TlogBlock::Builder* builder);
+	void encodeBlock(tlog_block *tb, TlogBlock::Builder* builder);
 };
 
 Flusher* get_flusher(shard_id id);
