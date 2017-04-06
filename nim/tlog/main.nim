@@ -24,16 +24,17 @@ proc flush(volume: VolumeHandler): Future[void] {.async.} =
     return
 
   volume.flushing = true
+  defer:
+    volume.flushing = false
+
+  if volume.waitingBlocks.len == 0:
+    return
 
   if volume.lastHash == nil:
     # lastHash not yet fetched
     let lastHash = await coreState.dbConnections[0].hget("volume-hash", $(volume.volumeId))
     volume.lastHash = lastHash
     # if volume is still nil, this volume is empty
-
-  if volume.waitingBlocks.len == 0:
-    volume.flushing = false
-    return
 
   let agg = TlogAggregation(blocks: volume.waitingBlocks,
                             volumeId: volume.volumeId,
@@ -63,7 +64,6 @@ proc flush(volume: VolumeHandler): Future[void] {.async.} =
   discard (await coreState.dbConnections[0].hset("volume-hash", $(volume.volumeId), aggHash))
   volume.lastHash = aggHash
   volume.waitingBlocks = @[]
-  volume.flushing = false # defer?
 
 proc handleMsgProc(blockMsg: TlogBlock): auto =
   return proc() =
