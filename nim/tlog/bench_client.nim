@@ -1,8 +1,8 @@
-import reactor, tlog/util, strutils, capnp, tlog/schema
+import reactor, tlog/util, strutils, capnp, tlog/schema, strutils, os
 
 proc main() {.async.} =
   let conn = await connectTcp("localhost", 11211)
-  let data = " ".repeat(1024)
+  let data = " ".repeat(4096)
   let dataMsg = packPointer(TlogBlock(
     volumeId: 0,
     sequence: 1,
@@ -13,7 +13,7 @@ proc main() {.async.} =
 
   conn.input.forEachChunk(proc(s: seq[byte]) = discard).ignore
 
-  while true:
+  for i in 0..parseInt(paramStr(1)):
     await writeMultisegment(conn.output, dataMsg)
 
 when isMainModule:
