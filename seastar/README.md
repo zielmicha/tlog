@@ -2,7 +2,11 @@
 
 ## Build Seastar framework
 
-Build seastar with DPDK
+Build seastar with DPDK.
+
+Latest working commit is `0ed826db3da55e103ee63562240bda0d7193a166`. Few attempts has been made to upgrade seastar to
+latest release, but seastar failed to build.
+
 ```
 cd
 git clone https://github.com/scylladb/seastar.git
