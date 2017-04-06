@@ -19,6 +19,16 @@ when defined(enableEncryption):
   let aesKey = expandAESKey("0".repeat(32))
 const zeroIV = "0".repeat(32)
 
+{.passl: "-lb2".}
+
+proc blake2b(output: cstring, input: cstring, key: cstring, outlen: int,
+             inlen: int, keylen: int): cint {.importc.}
+
+proc blakeHash(data: string): string =
+  result = newString(32)
+  let err = blake2b(result, data, "", result.len, data.len, 0)
+  assert err == 0
+
 proc flush(volume: VolumeHandler): Future[void] {.async.} =
   if volume.flushing:
     return
@@ -41,7 +51,7 @@ proc flush(volume: VolumeHandler): Future[void] {.async.} =
                             prev: volume.lastHash)
   let aggData = packPointer(agg)
   #let aggHash = coreState.hasher.computeHashes(@[aggData])[0]
-  let aggHash = $(secureHash(aggData))
+  let aggHash = $(blakeHash(aggData))
 
   const
     totalChunks = 10
@@ -86,7 +96,10 @@ proc handleClient(conn: TcpConnection) {.async.} =
     let blockMsg = capnp.newUnpacker(segments).unpackPointer(0, TlogBlock)
     #echo "recv volumeId:", blockMsg.volumeId, " seq:", blockMsg.sequence
     # do we need to wait for this to finish before returning response?
-    runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(blockMsg))
+    when defined(disableThreading):
+      handleMsgProc(blockMsg)()
+    else:
+      runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(blockMsg))
 
     let resp = TlogResponse(status: 0, sequences: @[blockMsg.sequence])
     let data = packPointer(resp)
@@ -121,7 +134,10 @@ proc loopMain() {.async.} =
     handleClient(conn).ignore
 
 proc main*() =
-  startMultiloop(mainProc=loopMain, threadCount=4)
+  when defined(disableThreading):
+    loopMain().runMain
+  else:
+    startMultiloop(mainProc=loopMain, threadCount=1)
 
 when isMainModule:
   main()
