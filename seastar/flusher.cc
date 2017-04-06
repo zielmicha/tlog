@@ -62,27 +62,24 @@ Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_ke
 void Flusher::post_init() {
 	_flushers[engine().cpu_id()] = this;
 	init_redis_conns();
+	std::cout << "post init finished\n";
 }
 
 void Flusher::add_packet(tlog_block *tb){
 	this->_packets[tb->_vol_id][tb->_sequence] = tb;
 }
 
-future<> Flusher::init_redis_conn(int idx) {
+void Flusher::init_redis_conn(int idx, int retry_quota) {
 	auto ipaddr = make_ipv4_address(ipv4_addr(_objstor_addr,_objstor_port + idx));
-	
-	return connect(ipaddr).then([this, idx] (connected_socket s) {
-			auto conn = new redis_conn(std::move(s));
-			_redis_conns[idx] = std::move(conn);
-			return make_ready_future<>();
-		});
+
+	_redis_conns[idx] = new redis_conn(ipaddr, idx);
 }
 
 void Flusher::init_redis_conns() {
 	auto num = 1 + _k + _m;
 		
 	for(int i=0; i < num; i++) {
-		init_redis_conn(i);
+		init_redis_conn(i, 2);
 	}
 }
 
@@ -177,6 +174,18 @@ static size_t capnp_outbuf_size(TlogAggregation::Builder& agg) {
 	return (agg.getSize() * BUF_SIZE) + CAPNP_OUTBUF_EXTRA;
 }
 
+static void free_flush_object(unsigned char *encrypted, unsigned char **er_input, unsigned char **er_coding,
+		int k, int m) {
+	free(encrypted);
+
+	free(er_input[k-1]); // only last element that was allocated
+	free(er_input);
+
+	for(int i=0; i < m; i++) {
+		free(er_coding[i]);
+	}
+	free(er_coding);
+}
 /* flush the packets to it's storage */
 future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& pq) {
 	flush_count++;
@@ -191,7 +200,7 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	
 	get_last_hash(volID, last_hash, &last_hash_len);
 
-	// create aggregation object
+	/************************** create capnp aggregation object ***************************/
 	::capnp::MallocMessageBuilder msg;
 	auto agg = msg.initRoot<TlogAggregation>();
 	
@@ -200,11 +209,8 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
 	
 	// build the aggregation blocks
-	// check if we can use packet's memory, to avoid memcpy
 	auto blocks = agg.initBlocks(pq.size());
 
-	// TODO : find a way to reuse packet data to avoid
-	// memcpy
 	std::vector<uint64_t> sequences;
 	for (int i=0; !pq.empty(); i++) {
 		auto block = blocks[i];
@@ -221,10 +227,11 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	writeMessage(aos, msg);
 	kj::ArrayPtr<kj::byte> bs = aos.getArray();
 
-	// compress it
+	/************************* compress ******************************************/
 	std::string compressed;
 	snappy::Compress((const char *) bs.begin(), bs.size(), &compressed);
 
+	/*********************** encrypt *********************************************/
 	// encrypt
 	// - align the compressed to 16 bytes boundary
 	// - allocate the output (same size?)
@@ -234,7 +241,7 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	int enc_len = aes_cbc_enc_256((void *) compressed.c_str(), _enc_iv, _enc_key, encrypted, compressed.length());
 
 	
-	// erasure encoding
+	/************************* erasure encoding *************************************/
 	Erasurer er(_k, _m); // TODO : check if we can reuse this object
 	int chunksize = er.chunksize(enc_len);
 
@@ -259,24 +266,27 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 		coding[i] = (unsigned char*) malloc(sizeof(char) * chunksize);
 	}
 	er.encode(inputs, coding, chunksize);
-	
-	uint8_t *hash = hash_gen(volID, (uint8_t *) encrypted, enc_len,
-			last_hash, last_hash_len);
+
+	/*************************** hash the encrypted object **********************/
+	uint8_t new_hash[HASH_LEN];
+	if (hash_gen(volID, new_hash, (uint8_t *) encrypted, enc_len,
+			last_hash, last_hash_len) != 0) {
 		
-	return storeEncodedAgg(volID, (const char *)hash, last_hash_len, (const char **)inputs, (const char **)coding,
-					chunksize).then([this, hash, inputs, coding, sequences, encrypted] (auto ok){
+		free_flush_object(encrypted, inputs, coding, _k, _m);
+		
+		auto *fr = new flush_result(FLUSH_MAX_TLOGS_FAILED);
+		return make_ready_future<flush_result*>(fr);
+	}
+	
+	/***************************** store erasure encoded data **********************/
+	return storeEncodedAgg(volID, (const char *)new_hash, last_hash_len, (const char **)inputs, 
+			(const char **)coding,chunksize).then([this, inputs, coding, sequences, encrypted] (auto ok){
 				
-						free(hash);
-						free(encrypted);
-						// cleanup erasure coding data
-						free(inputs[_k-1]);
-						free(inputs);
-						for(int i=0; i < _m; i++) {
-							free(coding[i]);
-						}
+						free_flush_object(encrypted, inputs, coding, _k, _m);
+						
 						flush_result *fr = new flush_result(ok? FLUSH_MAX_TLOGS_OK : FLUSH_MAX_TLOGS_FAILED);
 						fr->sequences = sequences;
-						free(coding);
+						
 						return make_ready_future<flush_result*>(fr);
 				});
 }
@@ -358,10 +368,6 @@ future<bool> Flusher::storeEncodedAgg(uint64_t vol_id, const char *hash, int has
 			for (unsigned i=0; i < vr.size(); i++) {
 				if (!vr[i]) {
 					is_ok = false;
-					// sleep for a while before re-creating the connection
-            		sleep(std::chrono::seconds(5)).then([this, i] {
-							init_redis_conn(i);
-						});
 				}
 			}
 			return make_ready_future<bool>(is_ok);
@@ -380,16 +386,10 @@ void Flusher::encodeBlock(tlog_block *tb, TlogBlock::Builder* builder) {
 		builder->setTimestamp(tb->_timestamp);
 	}
 
-uint8_t* Flusher::hash_gen(uint64_t vol_id, uint8_t *data, uint8_t data_len,
+int Flusher::hash_gen(uint64_t vol_id, uint8_t *new_hash, uint8_t *data, uint8_t data_len,
 			uint8_t *key, int key_len) {
 		
-	uint8_t *hash = (uint8_t *) malloc(sizeof(uint8_t) * HASH_LEN);
-	
-	if (blake2bp(hash, data, key, HASH_LEN, data_len, key_len) != 0) {
-		std::cerr << "failed to hash\n";
-		exit(1); // TODO : better error handling
-	}
-	return hash;
+	return blake2bp(new_hash, data, key, HASH_LEN, data_len, key_len);
 }
 
 /**
