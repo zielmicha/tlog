@@ -89,7 +89,9 @@ proc handleClient(conn: TcpConnection) {.async.} =
     runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(blockMsg))
 
     let resp = TlogResponse(status: 0, sequences: @[blockMsg.sequence])
-    await writeMultisegment(conn.output, packPointer(resp))
+    let data = packPointer(resp)
+    await conn.output.write($(data.len + 8) & "\r\n")
+    await writeMultisegment(conn.output, data)
 
 proc connectToRedis() {.async.} =
   for i in 1..10:
