@@ -152,7 +152,8 @@ private:
 
 	bool pick_to_flush(uint64_t vol_id, std::queue<tlog_block *> *q, int flush_size);
 
-	future<flush_result*> flush(uint32_t volID, std::queue<tlog_block *>& pq);
+	future<flush_result*> flush(uint32_t volID, std::queue<tlog_block *>* pq);
+	future<flush_result*> do_flush(uint32_t volID, std::queue<tlog_block *>* pq, uint8_t *last_hash);
 
 	bool ok_to_flush(uint32_t vol_id, int flush_size);
 
@@ -162,7 +163,7 @@ private:
 	int hash_gen(uint64_t vol_id, uint8_t *new_hash, uint8_t *data, uint8_t data_len,
 			uint8_t *key, int key_len);
 
-	void get_last_hash(uint32_t volID, uint8_t *hash, int *hash_len, bool retried = false);
+	future<bool> get_last_hash(uint32_t vol_id, uint8_t *hash);
 
 	void encodeBlock(tlog_block *tb, TlogBlock::Builder* builder);
 };

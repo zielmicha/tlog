@@ -98,3 +98,37 @@ future<bool> redis_conn::set(const char *key, int key_len,
 			}
 		});
 }
+
+std::string format_get(const std::string& key) {
+	std::stringstream ss;
+	// prefix
+	ss << "*2" << endline;
+
+	// set command
+	ss << "$3" << endline << "get" << endline;
+
+	// key
+	ss << "$" << key.length()  << endline;
+	ss << key + endline;
+
+	return ss.str();
+}
+
+future<bool> redis_conn::get(const std::string& key, uint8_t *val, unsigned int val_len) {
+	auto data = format_get(key);
+	auto p = net::packet(data.c_str(), data.length());
+	return _out.write(std::move(p)).then([this, val, val_len] {
+				return _out.flush();
+			}).then([this, val, val_len] {
+				return _in.read();
+			}).then([this, val, val_len] (auto buf) {
+				auto ok = false;
+				auto prefix_len = 1 /* $ */ + floor(log10(val_len)) + 1 /* val_len */ + endline.length();
+				if (buf && buf.size() == val_len + prefix_len) {
+					std::memcpy(val, buf.get(), buf.size());
+					ok = true;
+				}
+				return make_ready_future<bool>(ok);
+			});
+}
+

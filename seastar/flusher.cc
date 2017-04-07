@@ -26,7 +26,7 @@ static std::vector<Flusher *> _flushers(100);
 static std::map<uint32_t, uint8_t *> g_last_hash;
 
 /* len of blake2b hash we want to generate */
-static const int HASH_LEN = 32;
+static const unsigned int HASH_LEN = 32;
 
 static const int BUF_SIZE = 16472; /* size of the message we receive from client */
 
@@ -99,7 +99,6 @@ void Flusher::create_meta_redis_conn() {
  * call the flush if needed.
 */
 future<flush_result*> Flusher::check_do_flush(uint32_t vol_id) {
-	std::queue<tlog_block *> flush_q;
 	flush_result *fr = new flush_result(FLUSH_NO);
 	
 	if (!ok_to_flush(vol_id, _flush_size)) {
@@ -108,10 +107,15 @@ future<flush_result*> Flusher::check_do_flush(uint32_t vol_id) {
 	if (_packets[vol_id].size() < (unsigned)_flush_size) {
 		return make_ready_future<flush_result*>(fr);
 	}
-	if (pick_to_flush(vol_id, &flush_q, _flush_size) == false) {
+	
+	std::queue<tlog_block *> *flush_q = new std::queue<tlog_block*>();
+	if (pick_to_flush(vol_id, flush_q, _flush_size) == false) {
+		delete flush_q;
 		return make_ready_future<flush_result*>(fr);
 	}
-	return flush(vol_id, flush_q);
+	return flush(vol_id, flush_q).finally([flush_q] {
+			delete flush_q;
+			});
 }
 
 // check if we can do periodic flush on this core
@@ -139,13 +143,16 @@ future<> Flusher::periodic_flush() {
 			return make_ready_future<>();
 		}
 
-		std::queue<tlog_block *> flush_q;
-		if (pick_to_flush(vol_id, &flush_q, _packets[vol_id].size()) == false) {
+		std::queue<tlog_block *> *flush_q = new std::queue<tlog_block *>();
+		if (pick_to_flush(vol_id, flush_q, _packets[vol_id].size()) == false) {
+			delete flush_q;
 			return make_ready_future<>();
 		}
-		return flush(vol_id, flush_q).then([] (auto result) {
+		return flush(vol_id, flush_q).then([flush_q] (auto result) {
 				std::cout << "periodic flush at core:" << engine().cpu_id() << "\n";
 				return make_ready_future<>();
+				}).finally([flush_q] {
+					delete flush_q;
 				});
 	}).then([] {
 			return make_ready_future<>();
@@ -174,6 +181,7 @@ static size_t capnp_outbuf_size(TlogAggregation::Builder& agg) {
 	return (agg.getSize() * BUF_SIZE) + CAPNP_OUTBUF_EXTRA;
 }
 
+// free all objects created during flush process
 static void free_flush_object(unsigned char *encrypted, unsigned char **er_input, unsigned char **er_coding,
 		int k, int m) {
 	free(encrypted);
@@ -186,36 +194,45 @@ static void free_flush_object(unsigned char *encrypted, unsigned char **er_input
 	}
 	free(er_coding);
 }
+
+future<flush_result*> Flusher::flush(uint32_t vol_id, std::queue<tlog_block *> *pq) {
+	uint8_t *last_hash = (uint8_t *) malloc(HASH_LEN);
+
+	return get_last_hash(vol_id, last_hash).then([this, vol_id, pq, last_hash] (auto ok) {
+			if (!ok) {
+				auto *fr = new flush_result(FLUSH_MAX_TLOGS_FAILED);
+				return make_ready_future<flush_result*>(fr);
+			}
+			return this->do_flush(vol_id, pq, last_hash);
+		}).finally([last_hash] {
+			free(last_hash);
+		});
+}
 /* flush the packets to it's storage */
-future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& pq) {
+future<flush_result*> Flusher::do_flush(uint32_t volID, std::queue<tlog_block *> *pq, uint8_t *last_hash) {
 	flush_count++;
 	std::cout << "[flush]vol:" << volID <<".count:"<< flush_count;
-	std::cout << ".size:" << pq.size() << ".core:" << engine().cpu_id() << "\n";
+	std::cout << ".size:" << pq->size() << ".core:" << engine().cpu_id() << "\n";
 
 	// remember last time we flush
 	_last_flush_time[volID] = time(0);
-
-	uint8_t last_hash[HASH_LEN];
-	int last_hash_len;
-	
-	get_last_hash(volID, last_hash, &last_hash_len);
 
 	/************************** create capnp aggregation object ***************************/
 	::capnp::MallocMessageBuilder msg;
 	auto agg = msg.initRoot<TlogAggregation>();
 	
-	agg.setSize(pq.size());
+	agg.setSize(pq->size());
 	agg.setName("my aggregation v6");
 	agg.setPrev(kj::arrayPtr(last_hash, HASH_LEN));
 	
 	// build the aggregation blocks
-	auto blocks = agg.initBlocks(pq.size());
+	auto blocks = agg.initBlocks(pq->size());
 
 	std::vector<uint64_t> sequences;
-	for (int i=0; !pq.empty(); i++) {
+	for (int i=0; !pq->empty(); i++) {
 		auto block = blocks[i];
-		tlog_block *tb = pq.front();
-		pq.pop();
+		tlog_block *tb = pq->front();
+		pq->pop();
 		encodeBlock(tb, &block);
 		sequences.push_back(block.getSequence());
 		delete tb;
@@ -270,7 +287,7 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	/*************************** hash the encrypted object **********************/
 	uint8_t new_hash[HASH_LEN];
 	if (hash_gen(volID, new_hash, (uint8_t *) encrypted, enc_len,
-			last_hash, last_hash_len) != 0) {
+			last_hash, HASH_LEN) != 0) {
 		
 		free_flush_object(encrypted, inputs, coding, _k, _m);
 		
@@ -279,7 +296,7 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	}
 	
 	/***************************** store erasure encoded data **********************/
-	return storeEncodedAgg(volID, (const char *)new_hash, last_hash_len, (const char **)inputs, 
+	return storeEncodedAgg(volID, (const char *)new_hash, HASH_LEN, (const char **)inputs, 
 			(const char **)coding,chunksize).then([this, inputs, coding, sequences, encrypted] (auto ok){
 				
 						free_flush_object(encrypted, inputs, coding, _k, _m);
@@ -293,9 +310,9 @@ future<flush_result*> Flusher::flush(uint32_t volID, std::queue<tlog_block *>& p
 	
 /**
  * check if it is ok to flush to storage
- * 1. first tlog is one after last flush
+ * 1. first tlog is one after last flush TODO
  * 2. we have all sequences neded
- * 3. we need to handle if sequence number reset to 0
+ * 3. we need to handle if sequence number reset to 0 TODO
 */
 bool Flusher::ok_to_flush(uint32_t vol_id, int flush_size) {
 	auto packetsMap = _packets[vol_id];
@@ -392,52 +409,23 @@ int Flusher::hash_gen(uint64_t vol_id, uint8_t *new_hash, uint8_t *data, uint8_t
 	return blake2bp(new_hash, data, key, HASH_LEN, data_len, key_len);
 }
 
-/**
- * get hash(1) key.
- * use last hash or priv_key if we dont have last hash.
- * TODO :
- * - avoid memcpy
-*/
-	
-void Flusher::get_last_hash(uint32_t volID, uint8_t *hash, int *hash_len, bool retried) {
 
+future<bool> Flusher::get_last_hash(uint32_t vol_id, uint8_t *hash) {
 	// get last hash from memory
-	auto last_hash = g_last_hash[volID];
+	auto last_hash = g_last_hash[vol_id];
 	if (last_hash != NULL) {
 		memcpy(hash, last_hash, HASH_LEN);
-		*hash_len = HASH_LEN;
-		return;
+		return make_ready_future<bool>(true);
 	}
 
-	
-	// get last hash from DB
-	redisReply *reply;
-	reply = (redisReply *)redisCommand(_meta_redis_conn, "GET last_hash_%u", volID);
-	if (reply == NULL) {
-		// if we got null, we assume that redis connection is broken
-		// we create it again.
-		create_meta_redis_conn();
-		if (!retried) {
-			get_last_hash(volID, hash, hash_len, true);
-		}
-		return;
-	}
-
-	
-	// if there is no last hash, use priv key
-	if (reply->type == REDIS_REPLY_NIL) {
-		std::cout << "use priv_key as last_hash for vo" << volID << "\n";
-		memcpy(hash, _priv_key.c_str(), _priv_key.length());
-		*hash_len = _priv_key.length();
-		
-		freeReplyObject(reply);
-		return;
-	}
-	
-	// TODO : handle other error types
-
-	memcpy(hash, reply->str, reply->len);
-	*hash_len = reply->len;
-	freeReplyObject(reply);
+	// get last hash from redis
+	auto rc = _redis_conns[0];
+	auto key = std::string("last_hash_" + std::to_string(vol_id));
+	return rc->get(key, hash, HASH_LEN).then([this, hash] (auto ok) {
+			if (!ok) { // if not exist in redis, use private key
+				memcpy(hash, _priv_key.c_str(), HASH_LEN);
+			}
+			return make_ready_future<bool>(true);
+		});
 }
 
