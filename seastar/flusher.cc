@@ -10,7 +10,6 @@
 #include <capnp/serialize-packed.h>
 
 // other lib
-#include <hiredis/hiredis.h>
 #include <blake2.h>
 #include <isa-l/erasure_code.h>
 #include <snappy.h>
@@ -46,13 +45,16 @@ Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_ke
 	, _objstor_port(objstor_port)
 	, _priv_key(priv_key)
 {
+	// initialize redis_conns vector
 	_redis_conns.reserve(_k + _m + 1);
 	_redis_conns.resize(_k + _m + 1);
+
+	// encryption input vector
 	std::memset(_enc_iv, '0', 16);
+
+	// encryption key
 	uint8_t dec_key[256];
 	aes_keyexp_256((uint8_t *)priv_key.c_str(), _enc_key, dec_key);
-	
-	create_meta_redis_conn();
 }
 
 /**
@@ -62,7 +64,6 @@ Flusher::Flusher(std::string objstor_addr, int objstor_port, std::string priv_ke
 void Flusher::post_init() {
 	_flushers[engine().cpu_id()] = this;
 	init_redis_conns();
-	std::cout << "post init finished\n";
 }
 
 void Flusher::add_packet(tlog_block *tb){
@@ -81,16 +82,6 @@ void Flusher::init_redis_conns() {
 	for(int i=0; i < num; i++) {
 		init_redis_conn(i, 2);
 	}
-}
-
-void Flusher::create_meta_redis_conn() {
-	auto port = _objstor_port;
-
-	redisContext *c = redisConnect(_objstor_addr.c_str(), port);
-	if (c == NULL || c->err || redisEnableKeepAlive(c) != REDIS_OK) {
-		exit(-1); // TODO raise exception
-	}
-	_meta_redis_conn = c;
 }
 
 
@@ -195,21 +186,20 @@ static void free_flush_object(unsigned char *encrypted, unsigned char **er_input
 	free(er_coding);
 }
 
-future<flush_result*> Flusher::flush(uint32_t vol_id, std::queue<tlog_block *> *pq) {
-	uint8_t *last_hash = (uint8_t *) malloc(HASH_LEN);
+future<flush_result*> Flusher::flush(uint32_t vol_id, std::queue<tlog_block *>* pq) {
+	uint8_t last_hash[HASH_LEN];
 
-	return get_last_hash(vol_id, last_hash).then([this, vol_id, pq, last_hash] (auto ok) {
+	return get_last_hash(vol_id, last_hash).then([this, vol_id, pq, last_hash = std::move(last_hash)] (auto ok) {
 			if (!ok) {
 				auto *fr = new flush_result(FLUSH_MAX_TLOGS_FAILED);
 				return make_ready_future<flush_result*>(fr);
 			}
-			return this->do_flush(vol_id, pq, last_hash);
-		}).finally([last_hash] {
-			free(last_hash);
+			return this->do_flush(vol_id, pq, std::move(last_hash));
 		});
 }
+
 /* flush the packets to it's storage */
-future<flush_result*> Flusher::do_flush(uint32_t volID, std::queue<tlog_block *> *pq, uint8_t *last_hash) {
+future<flush_result*> Flusher::do_flush(uint32_t volID, std::queue<tlog_block *>* pq, uint8_t *last_hash) {
 	flush_count++;
 	std::cout << "[flush]vol:" << volID <<".count:"<< flush_count;
 	std::cout << ".size:" << pq->size() << ".core:" << engine().cpu_id() << "\n";
@@ -403,8 +393,8 @@ void Flusher::encodeBlock(tlog_block *tb, TlogBlock::Builder* builder) {
 		builder->setTimestamp(tb->_timestamp);
 	}
 
-int Flusher::hash_gen(uint64_t vol_id, uint8_t *new_hash, uint8_t *data, uint8_t data_len,
-			uint8_t *key, int key_len) {
+int Flusher::hash_gen(uint64_t vol_id, uint8_t *new_hash, const uint8_t *data, uint8_t data_len,
+			const uint8_t *key, int key_len) {
 		
 	return blake2bp(new_hash, data, key, HASH_LEN, data_len, key_len);
 }

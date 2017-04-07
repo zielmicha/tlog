@@ -17,7 +17,6 @@
 
 #include <isa-l/erasure_code.h>
 #include <blake2.h>
-#include <hiredis/hiredis.h>
 
 #include "tlog_block.h"
 #include "redis_conn.h"
@@ -113,9 +112,6 @@ private:
 	/* private key */
 	std::string _priv_key;
 
-	/* connection to redis meta server */
-	redisContext* _meta_redis_conn;
-
 	/* connection to storage servers */
 	std::vector<redis_conn *> _redis_conns;
 
@@ -148,8 +144,6 @@ private:
 	void init_redis_conn(int idx, int retry_quota=0);
 	void init_redis_conns();
 	
-	void create_meta_redis_conn();
-
 	bool pick_to_flush(uint64_t vol_id, std::queue<tlog_block *> *q, int flush_size);
 
 	future<flush_result*> flush(uint32_t volID, std::queue<tlog_block *>* pq);
@@ -160,8 +154,8 @@ private:
 	future<bool> storeEncodedAgg(uint64_t vol_id, const char *hash, int hash_len,
 			const char **data, const char **coding, int chunksize);
 
-	int hash_gen(uint64_t vol_id, uint8_t *new_hash, uint8_t *data, uint8_t data_len,
-			uint8_t *key, int key_len);
+	int hash_gen(uint64_t vol_id, uint8_t *new_hash, const uint8_t *data, uint8_t data_len,
+			const uint8_t *key, int key_len);
 
 	future<bool> get_last_hash(uint32_t vol_id, uint8_t *hash);
 
