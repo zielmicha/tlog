@@ -1,7 +1,7 @@
 CC=g++-5
 CPPFLAGS=-std=c++14 $(shell pkg-config --cflags $(SEASTAR)/build/release/seastar.pc)
 LDLIBS=-std=c++14 $(shell pkg-config --libs $(SEASTAR)/build/release/seastar.pc)
-LDLIBS += -lpthread -lcapnp -lkj -lcapnp-rpc -lhiredis -lb2 -lisal -lsnappy -lisal_crypto 
+LDLIBS += -lpthread -lcapnp -lkj -lcapnp-rpc -lb2 -lisal -lsnappy -lisal_crypto 
 
 main: main.o tlog_schema.capnp.o redis_conn.o flusher.o
 	$(CC) -o main main.o tlog_schema.capnp.o redis_conn.o flusher.o $(LDLIBS)
