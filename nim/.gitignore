@@ -6,3 +6,6 @@ nimcache/
 /tlog/test_client
 /.gdb_history
 /.nimenv
+/callgrind.out.*
+*.ndb
+gmon.out

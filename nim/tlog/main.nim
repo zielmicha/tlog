@@ -60,18 +60,25 @@ proc flush(volume: VolumeHandler): Future[void] {.async.} =
   let aggDataCompressed = snappy.compress(aggData)
   var aggDataEncrypted = aggDataCompressed
   when defined(enableEncryption):
-    aggDataEncrypted.setLen(aggDataEncrypted.len + 32 - (aggDataEncrypted.len mod 32))
+    aggDataEncrypted.setLen(aggDataEncrypted.len + 32 - (aggDataEncrypted.len mod 32)) # padding
     aggDataEncrypted = aesKey.encrypt(aggDataEncrypted)
 
-  let chunks = erasure_code.encodeString(aggDataCompressed, totalChunks, maxLost)
+  var chunks = erasure_code.encodeString(aggDataCompressed, totalChunks, maxLost)
   var waitFor: seq[Future[int64]] = @[]
+
+  when defined(timeRedis):
+    let start = epochTime()
+
   for i in 0..<totalChunks: # store in parallel
     waitFor.add coreState.dbConnections[i].hset("volume-data", aggHash, chunks[i])
   echo "waiting..."
   for fut in waitFor: discard (await fut)
-  echo "saved (", waitFor.len, " blocks)"
+  echo "saved (", waitFor.len, " chunks, ", volume.waitingBlocks.len, " blocks)"
 
-  discard (await coreState.dbConnections[0].hset("volume-hash", $(volume.volumeId), aggHash))
+  when defined(timeRedis):
+    echo "saving data to ARDB took ", (epochTime() - start) * 1000, " ms"
+
+  discard (await coreState.dbConnections[0].hset("volume-hash", $(volume.volumeId), aggHash))#]#
   volume.lastHash = aggHash
   volume.waitingBlocks = @[]
 
@@ -89,19 +96,20 @@ proc handleMsgProc(blockMsg: TlogBlock): auto =
 proc handleClient(conn: TcpConnection) {.async.} =
   while true:
     let segmentsR = tryAwait readMultisegment(conn.input)
+    #let segmentsR = tryAwait conn.input.read(16472) # 1.05 s
     if segmentsR.isError and segmentsR.error.getOriginal == JustClose: # eof?
       break
 
-    let segments = await segmentsR
-    let blockMsg = capnp.newUnpacker(segments).unpackPointer(0, TlogBlock)
+    let blockMsg = capnp.newUnpacker(segmentsR.get).unpackPointer(0, TlogBlock)
     #echo "recv volumeId:", blockMsg.volumeId, " seq:", blockMsg.sequence
     # do we need to wait for this to finish before returning response?
     when defined(disableThreading):
       handleMsgProc(blockMsg)()
     else:
+      # blockMsg.volumeId.int mod threadLoopCount() == threadLoopId()
       runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(blockMsg))
 
-    let resp = TlogResponse(status: 0, sequences: @[blockMsg.sequence])
+    let resp = TlogResponse(status: 0, sequences: @[#[blockMsg.sequence]#])
     let data = packPointer(resp)
     await conn.output.write($(data.len + 8) & "\r\n")
     await writeMultisegment(conn.output, data)
@@ -137,7 +145,7 @@ proc main*() =
   when defined(disableThreading):
     loopMain().runMain
   else:
-    startMultiloop(mainProc=loopMain, threadCount=1)
+    startMultiloop(mainProc=loopMain, threadCount=4)
 
 when isMainModule:
   main()
