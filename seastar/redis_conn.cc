@@ -73,7 +73,8 @@ future<bool> redis_conn::set(const char *key, int key_len,
 		const char *val, int val_len) {
 
 	auto data = format_set(key, key_len, val, val_len);
-	return _out.write(data).then([this, key, key_len, val, val_len] {
+	auto tbuf = temporary_buffer<char>(data.c_str(), data.length());
+	return _out.write(std::move(tbuf)).then([this, key, key_len, val, val_len] {
 			return _out.flush();
 		}).then([this, key, key_len, val, val_len] {
 			return _in.read();
@@ -116,8 +117,8 @@ std::string format_get(const std::string& key) {
 
 future<bool> redis_conn::get(const std::string& key, uint8_t *val, unsigned int val_len) {
 	auto data = format_get(key);
-	auto p = net::packet(data.c_str(), data.length());
-	return _out.write(std::move(p)).then([this, val, val_len] {
+	auto tbuf = temporary_buffer<char>(data.c_str(), data.length());
+	return _out.write(std::move(tbuf)).then([this, val, val_len] {
 				return _out.flush();
 			}).then([this, val, val_len] {
 				return _in.read();

@@ -201,6 +201,7 @@ public:
 
 private:
 	future<> send_response(output_stream<char>& out, flush_result* fr) {
+		// create capnp object
 		::capnp::MallocMessageBuilder msg;
 		auto agg = msg.initRoot<TlogResponse>();
 		
@@ -210,6 +211,7 @@ private:
 			sequences.set(i, fr->sequences[i]);
 		}
 
+		// encode capnp object
 		kj::byte outbuf[fr->approx_size() + 30];
 		kj::ArrayOutputStream aos(kj::arrayPtr(outbuf, sizeof(outbuf)));
 		writeMessage(aos, msg);
@@ -217,9 +219,12 @@ private:
 
 		delete fr;
 
+		// send it
 		std::string prefix = std::to_string(bs.size()) + "\r\n";
-		return out.write(prefix).then([&out, bs] {
-			return out.write((const char *)bs.begin(), bs.size());
+		auto tbuf = temporary_buffer<char>(prefix.c_str(), prefix.length());
+		return out.write(std::move(tbuf)).then([&out, bs] {
+			auto tbuf = temporary_buffer<char>((const char *) bs.begin(), bs.size());
+			return out.write(std::move(tbuf));
 		}).then([&out] {
 			return out.flush();
 		});
