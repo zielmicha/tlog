@@ -27,7 +27,7 @@ static std::map<uint32_t, uint8_t *> g_last_hash;
 /* len of blake2b hash we want to generate */
 static const unsigned int HASH_LEN = 32;
 
-static const int BUF_SIZE = 16472; /* size of the message we receive from client */
+static const int BUF_SIZE = 16448; /* size of the message we receive from client */
 
 /* number of extra bytes for capnp aggregation encoding
  * TODO : find the correct number. It currently based only

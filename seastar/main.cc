@@ -42,7 +42,7 @@ static std::vector<void *> servers;
 
 using clock_type = lowres_clock;
 
-const int BUF_SIZE = 16472; /* size of the message we receive from client */
+const int BUF_SIZE = 16448; /* size of the message we receive from client */
 
 /* erasure encoding variable */
 int K = 4;

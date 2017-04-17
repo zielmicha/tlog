@@ -19,7 +19,7 @@ func decodeResponse(data []byte) (*TlogResponse, error) {
 
 func buildCapnp(volID uint32, seq uint64, crc uint32,
 	lba, timestamp uint64, data []byte) ([]byte, error) {
-	msg, seg, err := capnp.NewMessage(capnp.MultiSegment(nil))
+	msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
 	if err != nil {
 		return nil, fmt.Errorf("build capnp:%v", err)
 	}
@@ -40,5 +40,6 @@ func buildCapnp(volID uint32, seq uint64, crc uint32,
 	buf := new(bytes.Buffer)
 
 	err = capnp.NewEncoder(buf).Encode(msg)
+
 	return buf.Bytes(), err
 }
