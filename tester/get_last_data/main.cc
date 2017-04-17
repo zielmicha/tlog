@@ -123,7 +123,10 @@ void decode_capnp(unsigned char *encoded, int encoded_len) {
 	auto agg = message.getRoot<TlogAggregation>();
 	std::cout << "agg size=" << agg.getSize() << ".name=" << agg.getName().cStr() << "\n";
 	for (auto block : agg.getBlocks()) {
-		std::cout<<"-> seq= " << block.getSequence() << " . vol id = " << block.getVolumeId() << "\n";
+		std::cout<<"-> seq= " << block.getSequence() << " . vol id = " << block.getVolumeId() << ".";
+		auto data = block.getData();
+		std::cout<<"1st 3 bytes=" << data[0] << data[1] << data[2] << ".";
+		std::cout << "\n";
 	}
 }
 
