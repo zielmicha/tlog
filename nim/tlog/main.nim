@@ -11,6 +11,7 @@ type
     volumeId: uint32
     lastHash: string
     waitingBlocks: seq[TlogBlock]
+    waitingSegments: seq[ByteView]
     flushing: bool
 
 var coreState {.threadvar.}: CoreState
@@ -49,15 +50,16 @@ proc flush(volume: VolumeHandler): Future[void] {.async.} =
   let agg = TlogAggregation(blocks: volume.waitingBlocks,
                             volumeId: volume.volumeId,
                             prev: volume.lastHash)
-  let aggData = packPointer(agg)
-  #let aggHash = coreState.hasher.computeHashes(@[aggData])[0]
-  let aggHash = $(blakeHash(aggData))
+  let packer = newPacker(initialBufferSize=17000 * volume.waitingBlocks.len)
+  packPointer(packer, 0, agg)
+
+  let aggDataCompressed = snappy.compress(packer.buffer)
+  let aggHash = $(blakeHash(aggDataCompressed))
 
   const
     totalChunks = 10
     maxLost = 3
 
-  let aggDataCompressed = snappy.compress(aggData)
   var aggDataEncrypted = aggDataCompressed
   when defined(enableEncryption):
     aggDataEncrypted.setLen(aggDataEncrypted.len + 32 - (aggDataEncrypted.len mod 32)) # padding
@@ -71,25 +73,33 @@ proc flush(volume: VolumeHandler): Future[void] {.async.} =
 
   for i in 0..<totalChunks: # store in parallel
     waitFor.add coreState.dbConnections[i].hset("volume-data", aggHash, chunks[i])
-  echo "waiting..."
+  # echo "waiting..."
   for fut in waitFor: discard (await fut)
-  echo "saved (", waitFor.len, " chunks, ", volume.waitingBlocks.len, " blocks)"
+  # echo "saved (", waitFor.len, " chunks, ", volume.waitingBlocks.len, " blocks)"
 
   when defined(timeRedis):
     echo "saving data to ARDB took ", (epochTime() - start) * 1000, " ms"
 
-  discard (await coreState.dbConnections[0].hset("volume-hash", $(volume.volumeId), aggHash))#]#
+  discard (await coreState.dbConnections[0].hset("volume-hash", $(volume.volumeId), aggHash))
   volume.lastHash = aggHash
+
+  for view in volume.waitingSegments:
+    deallocShared(view.data)
+
+  volume.waitingSegments = @[]
   volume.waitingBlocks = @[]
 
-proc handleMsgProc(blockMsg: TlogBlock): auto =
+proc handleMsgProc(segments: seq[ByteView]): auto =
   return proc() =
+           let blockMsg = capnp.newUnpacker(segments).unpackPointer(0, TlogBlock)
            if blockMsg.volumeId notin coreState.volumes:
              echo "cache miss: ", blockMsg.volumeId
-             coreState.volumes[blockMsg.volumeId] = VolumeHandler(waitingBlocks: @[], volumeId: blockMsg.volumeId)
+             coreState.volumes[blockMsg.volumeId] = VolumeHandler(waitingBlocks: @[], volumeId: blockMsg.volumeId,
+                                                                  waitingSegments: @[])
 
            let vol = coreState.volumes[blockMsg.volumeId]
            vol.waitingBlocks.add(blockMsg)
+           vol.waitingSegments &= segments
            if vol.waitingBlocks.len > 100:
              vol.flush.ignore
 
@@ -100,14 +110,14 @@ proc handleClient(conn: TcpConnection) {.async.} =
     if segmentsR.isError and segmentsR.error.getOriginal == JustClose: # eof?
       break
 
-    let blockMsg = capnp.newUnpacker(segmentsR.get).unpackPointer(0, TlogBlock)
-    #echo "recv volumeId:", blockMsg.volumeId, " seq:", blockMsg.sequence
-    # do we need to wait for this to finish before returning response?
+    var segments = segmentsR.get
+
+    let blockMsg = capnp.newUnpacker(segments).unpackPointer(0, TlogBlock)
     when defined(disableThreading):
-      handleMsgProc(blockMsg)()
+      handleMsgProc(segments)()
     else:
       # blockMsg.volumeId.int mod threadLoopCount() == threadLoopId()
-      runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(blockMsg))
+      runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(segments))
 
     let resp = TlogResponse(status: 0, sequences: @[#[blockMsg.sequence]#])
     let data = packPointer(resp)

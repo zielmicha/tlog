@@ -5,7 +5,7 @@ set -e
 
 bench() {
     if [ "$SEASTAR" = "" ]; then
-        ./tlog/main >/dev/null & DAEMONPID=$!
+        ./tlog/main & DAEMONPID=$!
         # about 0.9 s on my laptop
     else
         ../seastar/main --objstor_port 11001  & DAEMONPID=$!
