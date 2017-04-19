@@ -4,3 +4,8 @@ nimcache/
 /nim.cfg
 /tlog/main
 /tlog/test_client
+/.gdb_history
+/.nimenv
+/callgrind.out.*
+*.ndb
+gmon.out

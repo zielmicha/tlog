@@ -1,4 +1,4 @@
-import tlog/schema, reactor, capnp, strutils
+import tlog/schema, tlog/util, reactor, capnp, strutils, collections
 
 proc main*() {.async.} =
   let conn = await connectTcp("localhost", 11211)
@@ -14,7 +14,9 @@ proc main*() {.async.} =
   await conn.output.writeItem(uint32(data.len div 8), littleEndian)
   await conn.output.write(data)
 
-  await asyncSleep(1000)
+  let respData = await conn.input.readMultisegment
+  let resp = newUnpacker(respData).unpackPointer(0, TlogResponse)
+  echo resp.pprint
 
 when isMainModule:
   main().runMain

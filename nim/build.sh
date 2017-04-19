@@ -55,10 +55,10 @@ get_dep() {
 
 echo "path: \".\"" > nim.cfg
 
-get_dep capnp https://github.com/zielmicha/capnp.nim dbf9c5681e420a05dd9c193b75006c743b070df5 ''
+get_dep capnp https://github.com/zielmicha/capnp.nim 69b9d07096a4b8af283a25e6a4bdf249e870351e ''
 get_dep collections https://github.com/zielmicha/collections.nim 41a4c5451d2ad71bd28fbabb9335aed427b19ae4 ''
-get_dep isa https://github.com/nimscale/isa aa92ef41cec1f979bffcdbaac470b545db1d6a8a ''
-get_dep reactor https://github.com/zielmicha/reactor.nim 682b05339d50a33f699d4d45a3ae3eb6246f3ba7 ''
+get_dep isa https://github.com/nimscale/isa 19a58e4e1be29b21300e0c7e324ba74322a075a8 ''
+get_dep reactor https://github.com/zielmicha/reactor.nim ea5645fcfd693871e66d50bd163e77b9289058a9 ''
 
 echo '# reactor.nim requires pthreads
 threads: "on"
@@ -73,18 +73,21 @@ hint[XDeclaredButNotUsed]: "off"
 
 debugger: "native"
 
+threadanalysis: off # temporary, until asyncmacro is fixed
+
 @if release:
   gcc.options.always = "-w -fno-strict-overflow"
   gcc.cpp.options.always = "-w -fno-strict-overflow"
   clang.options.always = "-w -fno-strict-overflow"
   clang.cpp.options.always = "-w -fno-strict-overflow"
 
-  passC:"-ffunction-sections -fdata-sections -flto -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+  passC:"-ffunction-sections -fdata-sections -flto -fPIE"
   passL:"-Wl,--gc-sections -flto -fPIE"
 
-  obj_checks: on
-  field_checks: on
-  bound_checks: on
+  # tlog doesn'"'"'t handle input from untrusted sources (these checks are very cheap)
+  obj_checks: off
+  field_checks: off
+  bound_checks: off
 @end' >> nim.cfg
 
 mkdir -p bin

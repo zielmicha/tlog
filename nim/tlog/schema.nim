@@ -1,4 +1,4 @@
-import capnp, capnp/gensupport, collections/iface
+import capnp, capnp/gensupport, collections/iface, collections/views
 
 # file: ../schema/tlog_schema.capnp
 
@@ -13,7 +13,7 @@ type
     lba*: uint64
     size*: uint32
     crc32*: uint32
-    data*: string
+    data*: ByteView
     timestamp*: uint64
 
   TlogAggregation* = ref object
