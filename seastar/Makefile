@@ -21,5 +21,7 @@ packet_cache.o: packet_cache.cc packet_cache.h
 main.o: main.cc connection.h
 	$(CC) $(CPPFLAGS) -c main.cc
 
+release: main
+	strip -s main
 clean:
 	rm -vf *.o main

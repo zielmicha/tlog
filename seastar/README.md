@@ -37,7 +37,7 @@ bash install_dependencies.sh
 ### build it
 
 ```
-make
+make release
 ```
 
 ## Run in development environment

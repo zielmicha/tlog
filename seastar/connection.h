@@ -1,13 +1,15 @@
-#ifndef _connection_h_
-#define _connection_h_
+#ifndef _tlog_connection_h_
+#define _tlog_connection_h_
 
-//#include "core/app-template.hh"
-//#include "core/future-util.hh"
-//#include "core/units.hh"
 #include "core/app-template.hh"
 #include "core/future-util.hh"
+#include "core/timer-set.hh"
+#include "core/shared_ptr.hh"
 #include "core/units.hh"
+#include "core/distributed.hh"
 #include "core/bitops.hh"
+#include "core/sleep.hh"
+
 
 
 
