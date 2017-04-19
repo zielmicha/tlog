@@ -10,15 +10,17 @@ import (
 var (
 	numClient int
 	numFlush  int
+	printResp bool
 )
 
 func main() {
 	flag.IntVar(&numClient, "num_client", 2, "number of clients")
 	flag.IntVar(&numFlush, "num_flush", 40, "number of flush")
+	flag.BoolVar(&printResp, "print_resp", false, "print response")
 
 	flag.Parse()
 
-	var volID uint32 = 0x1f
+	volID := "1234567890"
 
 	clients := make([]*client.Client, numClient)
 	clientReady := make(chan int, numClient)
@@ -59,11 +61,15 @@ func main() {
 			}
 			tr, err := client.RecvOne()
 			if err != nil {
-				log.Printf("client %v failed to recv:%v\n", idx, err)
-			} else {
+				log.Fatalf("client %v failed to recv:%v\n", idx, err)
+			}
+			if printResp {
 				log.Printf("status=%v, seqs=%v\n", tr.Status, tr.Sequences)
 			}
 			clientReady <- idx
 		}(seq, idx)
+		if int(seq)+1 == 25*numFlush {
+			return
+		}
 	}
 }
