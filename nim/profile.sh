@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 # -d:disableThreading
-killall -INT main
+killall -INT main || true
 nim c -d:profiling -d:release ./tlog/main
 ./tlog/main >/dev/null & DAEMONPID=$!
 sleep 1

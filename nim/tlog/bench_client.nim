@@ -4,7 +4,7 @@ proc main() {.async.} =
   let conn = await connectTcp("localhost", 11211)
   var data = " ".repeat(1024 * 16)
   var dataMsg = packPointer(TlogBlock(
-    volumeId: 2,
+    volumeId: "hello",
     sequence: 1,
     lba: 1,
     size: data.len.uint32,

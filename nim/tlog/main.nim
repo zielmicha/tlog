@@ -1,14 +1,14 @@
-import reactor, capnp, collections/pprint, collections, reactor/redis, times, isa/erasure_code, isa/hash, securehash, reactor/threading, os, snappy, isa/aes
+import reactor, capnp, collections/pprint, collections, reactor/redis, times, isa/erasure_code, isa/hash, securehash, reactor/threading, os, snappy, isa/aes, hashes
 import tlog/schema, tlog/util
 
 type
   CoreState = ref object
     dbConnections: seq[RedisClient]
     hasher: Sha512Pool
-    volumes: Table[uint32, VolumeHandler]
+    volumes: Table[string, VolumeHandler]
 
   VolumeHandler = ref object
-    volumeId: uint32
+    volumeId: string
     lastHash: string
     waitingBlocks: seq[TlogBlock]
     waitingSegments: seq[ByteView]
@@ -117,7 +117,7 @@ proc handleClient(conn: TcpConnection) {.async.} =
       handleMsgProc(segments)()
     else:
       # blockMsg.volumeId.int mod threadLoopCount() == threadLoopId()
-      runOnThread((blockMsg.volumeId.int mod threadLoopCount()), handleMsgProc(segments))
+      runOnThread((blockMsg.volumeId.hash mod threadLoopCount()), handleMsgProc(segments))
 
     let resp = TlogResponse(status: 0, sequences: @[#[blockMsg.sequence]#])
     let data = packPointer(resp)
@@ -141,7 +141,7 @@ proc periodicFlusher() {.async.} =
 proc loopMain() {.async.} =
   echo "init"
   coreState = CoreState(dbConnections: @[], hasher: newSha512Pool(),
-                        volumes: initTable[uint32, VolumeHandler]())
+                        volumes: initTable[string, VolumeHandler]())
   await connectToRedis()
   let server = await createTcpServer(11211, reusePort=true)
 
